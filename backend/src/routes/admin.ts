@@ -36,6 +36,15 @@ import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-a
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireRole("admin", "reviewer"));
 
+/** Reviewers may read and decide approvals only. All other writes require admin. */
+adminRouter.use((req, _res, next) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (req.user?.role === "admin") return next();
+  const path = req.path || "";
+  if (req.user?.role === "reviewer" && req.method === "POST" && path.startsWith("/approvals")) return next();
+  return next(new HttpError(403, "Reviewers can only read and decide approvals. Admin required for this write.", "FORBIDDEN"));
+});
+
 const optionSchema = z.object({ key: z.string().min(1).max(2), text: z.string().min(1) });
 
 adminRouter.get(

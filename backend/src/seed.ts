@@ -40,6 +40,15 @@ function choice(stem: string, options: string[], correctIndex: number, explanati
 }
 
 async function main() {
+  if (config.isProd || process.env.NODE_ENV === "production") {
+    throw new Error("Refusing to seed when NODE_ENV=production. Use an explicit migration instead.");
+  }
+  if (!config.allowDemoSeed) {
+    throw new Error("Demo seed blocked. Set ALLOW_DEMO_SEED=true for local/demo databases only.");
+  }
+  if (config.adminPassword === config.demoAdminPassword) {
+    console.warn("WARNING: seeding with default admin password. Change ADMIN_PASSWORD before any shared deploy.");
+  }
   await connectDb();
   const existing = await Exam.findOne({ code: "TNPSC-G2" });
   if (existing) {

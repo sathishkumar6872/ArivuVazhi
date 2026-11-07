@@ -384,16 +384,39 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
   const [marks, setMarks] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(Boolean(user.primaryExamId));
   const [tab, setTab] = useState("Subjects");
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   useEffect(() => {
     if (!user.primaryExamId) {
       setExam(null);
+      setLoading(false);
       return;
     }
-    api(`/exams/${user.primaryExamId}`).then(setExam).catch((err) => setError(err.message));
-    api<any[]>("/bookmarks").then(setMarks).catch(() => undefined);
-    api<any[]>("/practice/history").then(setHistory).catch(() => undefined);
+    let alive = true;
+    setLoading(true);
+    Promise.all([
+      api(`/exams/${user.primaryExamId}`),
+      api<any[]>("/bookmarks").catch(() => []),
+      api<any[]>("/practice/history").catch(() => []),
+    ])
+      .then(([nextExam, nextMarks, nextHistory]) => {
+        if (!alive) return;
+        setExam(nextExam);
+        setMarks(nextMarks);
+        setHistory(nextHistory);
+        setError("");
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
   }, [user.primaryExamId]);
   const subjects = exam?.subjects || [];
   const topics = subjects.flatMap((subject: any) => (subject.topics || []).map((topic: any) => ({ ...topic, subjectName: subject.name })));
@@ -402,10 +425,11 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
       <Header title="Practice" subtitle={exam?.name || "Primary exam"} />
       <Segment options={["Subjects", "Topics", "Saved", "History"]} value={tab} onChange={setTab} />
       {error ? <Banner message={error} /> : null}
-      {!user.primaryExamId && (
+      {loading ? <Loading label="Loading practice…" /> : null}
+      {!loading && !user.primaryExamId && (
         <Empty title="Choose an exam" body="Open Exams tab, pick an exam, then Set as current exam." />
       )}
-      {user.primaryExamId && (tab === "Subjects" || tab === "Topics") && (
+      {!loading && user.primaryExamId && (tab === "Subjects" || tab === "Topics") && (
         <View>
           <Text style={{ color: palette.muted, fontWeight: "700", marginBottom: 6 }}>Difficulty</Text>
           <Segment options={["easy", "medium", "hard"]} value={difficulty} onChange={(value) => setDifficulty(value as typeof difficulty)} />
@@ -417,7 +441,7 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
           ) : null}
         </View>
       )}
-      {tab === "Subjects" && user.primaryExamId && subjects.map((subject: any) => {
+      {!loading && tab === "Subjects" && user.primaryExamId && subjects.map((subject: any) => {
         const rows = subject.topics || [];
         const studied = rows.filter((topic: any) => topic.studied).length;
         const percent = rows.length ? Math.round((studied / rows.length) * 100) : 0;
@@ -432,10 +456,10 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
           </Card>
         );
       })}
-      {tab === "Subjects" && user.primaryExamId && exam && !subjects.length && (
+      {!loading && tab === "Subjects" && user.primaryExamId && exam && !subjects.length && (
         <Empty title="No syllabus yet" body="Admin must discover subjects for your current exam before practice by subject works. Quick 5 still needs published questions." />
       )}
-      {tab === "Topics" && topics.map((topic: any) => (
+      {!loading && tab === "Topics" && topics.map((topic: any) => (
         <Card key={topic.id} onPress={() => go({ name: "quiz", examId: user.primaryExamId, topicId: topic.id, title: topic.name, difficulty })}>
           <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
             <Text style={{ color: palette.ink, fontWeight: "700", flex: 1 }}>{topic.name}</Text>
@@ -445,20 +469,20 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
           <Progress value={topic.accuracy || 0} />
         </Card>
       ))}
-      {tab === "Topics" && user.primaryExamId && exam && !topics.length && (
+      {!loading && tab === "Topics" && user.primaryExamId && exam && !topics.length && (
         <Empty title="No topics yet" body="Update subject topics in admin syllabus, then come back here." />
       )}
-      {tab === "Saved" && marks.map((question) => (
+      {!loading && tab === "Saved" && marks.map((question) => (
         <Card key={question.id}><Text style={{ color: palette.ink, fontWeight: "700" }}>{question.stem}</Text></Card>
       ))}
-      {tab === "Saved" && !marks.length && <Empty title="No bookmarks" body="Save a question after you check the answer." />}
-      {tab === "History" && history.map((session) => (
+      {!loading && tab === "Saved" && !marks.length && <Empty title="No bookmarks" body="Save a question after you check the answer." />}
+      {!loading && tab === "History" && history.map((session) => (
         <Card key={session.id}>
           <Text style={{ color: palette.ink, fontWeight: "800" }}>{session.correct}/{session.total} correct</Text>
           <Text style={{ color: palette.muted }}>{session.difficulty || "Mixed"} · {session.status}</Text>
         </Card>
       ))}
-      {tab === "History" && !history.length && <Empty title="No practice history" body="Complete a practice set to see it here." />}
+      {!loading && tab === "History" && !history.length && <Empty title="No practice history" body="Complete a practice set to see it here." />}
     </Screen>
   );
 }

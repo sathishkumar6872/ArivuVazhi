@@ -35,12 +35,13 @@ export function HomeScreen({ user, go }: { user: Student; go: (route: Route) => 
   const openCount = tasks.filter((task: any) => task.status !== "completed").length;
   const accuracy = data?.accuracy || 0;
   const streak = data?.streak || user.streak || 0;
+  const ready = Boolean(data);
   return (
     <Screen>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <View>
           <Text style={{ color: palette.primary, fontSize: 26, fontWeight: "800" }}>{hello} {name}!</Text>
-          <Text style={{ color: palette.muted, marginTop: 2 }}>{data?.exam?.name || "Choose your exam"}</Text>
+          <Text style={{ color: palette.muted, marginTop: 2 }}>{ready ? (data?.exam?.name || "Choose your exam") : " "}</Text>
         </View>
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Pressable accessibilityRole="button" accessibilityLabel="Notifications" onPress={() => go({ name: "alerts" })} style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.line, alignItems: "center", justifyContent: "center" }}>
@@ -52,61 +53,65 @@ export function HomeScreen({ user, go }: { user: Student; go: (route: Route) => 
         </View>
       </View>
       {error ? <Banner message={error} /> : null}
-      {!data && !error ? <Loading variant="home" /> : null}
+      {!ready && !error ? <Loading variant="home" /> : null}
 
-      <Card style={{ backgroundColor: palette.primary, borderColor: palette.primary, marginTop: 8 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
-          <View style={{ width: 92, height: 92, borderRadius: 46, borderWidth: 8, borderColor: palette.accent, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ color: "#FFFFFF", fontSize: 24, fontWeight: "800" }}>{accuracy}%</Text>
+      {ready ? (
+        <View>
+          <Card style={{ backgroundColor: palette.primary, borderColor: palette.primary, marginTop: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+              <View style={{ width: 92, height: 92, borderRadius: 46, borderWidth: 8, borderColor: palette.accent, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ color: "#FFFFFF", fontSize: 24, fontWeight: "800" }}>{accuracy}%</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: palette.mint, fontWeight: "700", fontSize: 12 }}>PRACTICE ACCURACY</Text>
+                <Text style={{ color: "#FFFFFF", fontSize: 18, fontWeight: "800", marginTop: 4 }}>{streak} day study streak</Text>
+                <Text style={{ color: "#D1FAE5", marginTop: 4 }}>{done} of {planned || 0} planned minutes done today</Text>
+              </View>
+            </View>
+          </Card>
+
+          <Pressable accessibilityRole="button" accessibilityLabel="Change exam" onPress={() => go({ name: "exams" })} style={{ flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: palette.greenSoft, borderRadius: 16, padding: 14, marginTop: 12, marginBottom: 4 }}>
+            <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: palette.surface, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="school" size={20} color={palette.green} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: palette.ink, fontWeight: "800", fontSize: 15 }}>{data?.exam?.name || "Choose an exam"}</Text>
+              <Text style={{ color: palette.muted, marginTop: 2 }}>{t("Your current exam")}</Text>
+            </View>
+            <Text style={{ color: palette.green, fontWeight: "800" }}>{t("Change")}</Text>
+          </Pressable>
+
+          {resume ? (
+            <Card onPress={() => go({ name: "mockRun", mockId: resume.id })} style={{ marginTop: 8, borderColor: palette.accent }}>
+              <Text style={{ color: palette.green, fontWeight: "800" }}>Continue mock</Text>
+              <Text style={{ color: palette.ink, fontWeight: "700", marginTop: 4 }}>{resume.title}</Text>
+            </Card>
+          ) : null}
+
+          <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800", marginTop: 18, marginBottom: 8 }}>Quick actions</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" }}>
+            <IconTile icon="create-outline" label="Practice" onPress={() => go({ name: "practice" })} />
+            <IconTile icon="document-text-outline" label="Mock Tests" onPress={() => go({ name: "mocks" })} />
+            <IconTile icon="chatbubble-ellipses-outline" label="AI Tutor" onPress={() => go({ name: "tutor" })} />
+            <IconTile icon="library-outline" label="Syllabus" onPress={() => go({ name: "exams" })} />
+            <IconTile icon="calendar-outline" label="Study Plan" onPress={() => go({ name: "planner" })} />
+            <IconTile icon="stats-chart-outline" label="Analytics" onPress={() => go({ name: "analytics" })} />
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: palette.mint, fontWeight: "700", fontSize: 12 }}>PRACTICE ACCURACY</Text>
-            <Text style={{ color: "#FFFFFF", fontSize: 18, fontWeight: "800", marginTop: 4 }}>{streak} day study streak</Text>
-            <Text style={{ color: "#D1FAE5", marginTop: 4 }}>{done} of {planned || 0} planned minutes done today</Text>
+
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8, marginBottom: 8 }}>
+            <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800" }}>{t("Today's plan")} ({openCount})</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open planner" onPress={() => go({ name: "planner" })}><Text style={{ color: palette.green, fontWeight: "800" }}>{t("View all")}</Text></Pressable>
           </View>
+          {tasks.map((task: any) => (
+            <Pressable key={task.id} accessibilityRole="button" accessibilityLabel={task.title} onPress={() => toggle(task)} style={{ flexDirection: "row", gap: 12, alignItems: "center", backgroundColor: palette.surface, borderRadius: 16, borderWidth: 1, borderColor: palette.line, padding: 14, marginBottom: 8 }}>
+              <Ionicons name={task.status === "completed" ? "checkmark-circle" : "ellipse-outline"} size={22} color={task.status === "completed" ? palette.green : "#C5D0C9"} />
+              <Text style={{ flex: 1, color: palette.ink, fontWeight: "600" }}>{task.title}</Text>
+              <Text style={{ color: palette.muted }}>{task.minutes}m</Text>
+            </Pressable>
+          ))}
+          {!tasks.length ? <Empty title="No plan yet" body="Add a task from the planner." /> : null}
         </View>
-      </Card>
-
-      <Pressable accessibilityRole="button" accessibilityLabel="Change exam" onPress={() => go({ name: "exams" })} style={{ flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: palette.greenSoft, borderRadius: 16, padding: 14, marginTop: 12, marginBottom: 4 }}>
-        <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: palette.surface, alignItems: "center", justifyContent: "center" }}>
-          <Ionicons name="school" size={20} color={palette.green} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: palette.ink, fontWeight: "800", fontSize: 15 }}>{data?.exam?.name || "Choose an exam"}</Text>
-          <Text style={{ color: palette.muted, marginTop: 2 }}>{t("Your current exam")}</Text>
-        </View>
-        <Text style={{ color: palette.green, fontWeight: "800" }}>{t("Change")}</Text>
-      </Pressable>
-
-      {resume && (
-        <Card onPress={() => go({ name: "mockRun", mockId: resume.id })} style={{ marginTop: 8, borderColor: palette.accent }}>
-          <Text style={{ color: palette.green, fontWeight: "800" }}>Continue mock</Text>
-          <Text style={{ color: palette.ink, fontWeight: "700", marginTop: 4 }}>{resume.title}</Text>
-        </Card>
-      )}
-
-      <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800", marginTop: 18, marginBottom: 8 }}>Quick actions</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" }}>
-        <IconTile icon="create-outline" label="Practice" onPress={() => go({ name: "practice" })} />
-        <IconTile icon="document-text-outline" label="Mock Tests" onPress={() => go({ name: "mocks" })} />
-        <IconTile icon="chatbubble-ellipses-outline" label="AI Tutor" onPress={() => go({ name: "tutor" })} />
-        <IconTile icon="library-outline" label="Syllabus" onPress={() => go({ name: "exams" })} />
-        <IconTile icon="calendar-outline" label="Study Plan" onPress={() => go({ name: "planner" })} />
-        <IconTile icon="stats-chart-outline" label="Analytics" onPress={() => go({ name: "analytics" })} />
-      </View>
-
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8, marginBottom: 8 }}>
-        <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800" }}>{t("Today's plan")} ({openCount})</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open planner" onPress={() => go({ name: "planner" })}><Text style={{ color: palette.green, fontWeight: "800" }}>{t("View all")}</Text></Pressable>
-      </View>
-      {tasks.map((task: any) => (
-        <Pressable key={task.id} accessibilityRole="button" accessibilityLabel={task.title} onPress={() => toggle(task)} style={{ flexDirection: "row", gap: 12, alignItems: "center", backgroundColor: palette.surface, borderRadius: 16, borderWidth: 1, borderColor: palette.line, padding: 14, marginBottom: 8 }}>
-          <Ionicons name={task.status === "completed" ? "checkmark-circle" : "ellipse-outline"} size={22} color={task.status === "completed" ? palette.green : "#C5D0C9"} />
-          <Text style={{ flex: 1, color: palette.ink, fontWeight: "600" }}>{task.title}</Text>
-          <Text style={{ color: palette.muted }}>{task.minutes}m</Text>
-        </Pressable>
-      ))}
-      {!tasks.length && data ? <Empty title="No plan yet" body="Add a task from the planner." /> : null}
+      ) : null}
     </Screen>
   );
 }

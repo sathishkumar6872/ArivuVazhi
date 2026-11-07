@@ -3,8 +3,25 @@ import { completeChatGptResponse } from "./chatgpt-auth.js";
 import { completeGemini } from "./gemini-settings.js";
 import { config } from "./config.js";
 import { HttpError, nid } from "./http.js";
+import { assertAiBudgetAvailable, estimateAiInr } from "./ai-budget.js";
 import { AiUsage, AppConfig, Exam, Question, Subject, Topic, User } from "./models.js";
 import { getOpenAiSettings } from "./openai-settings.js";
+
+const AI_TIMEOUT_MS = 55_000;
+
+async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new HttpError(504, `${label} timed out. Try again.`, "AI_TIMEOUT")), AI_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 const generatedQuestionSchema = z.object({
   stem: z.string().min(8).max(800),
@@ -111,6 +128,7 @@ export async function generateMcqBundle(input: {
   difficulty: "easy" | "medium" | "hard";
   count: number;
 }): Promise<{ questions: GeneratedMcq[]; provider: string }> {
+  await assertAiBudgetAvailable("practice generation");
   const provider = await resolveProvider();
   if (provider === "local") {
     throw new HttpError(503, "Enable ChatGPT or Gemini in AI providers to generate practice questions.", "AI_UNAVAILABLE");
@@ -136,7 +154,7 @@ Count: ${count}
 JSON shape:
 {"questions":[{"stem":"...","options":[{"key":"A","text":"..."},{"key":"B","text":"..."},{"key":"C","text":"..."},{"key":"D","text":"..."}],"correctKey":"A","explanation":"...","difficulty":"${input.difficulty}"}]}`;
 
-  const raw = await completeRaw(system, user, provider);
+  const raw = await withTimeout(completeRaw(system, user, provider), "Question generation");
   const parsed = generatedBundleSchema.parse(extractJson(raw));
   const questions = parsed.questions.slice(0, count).map(normalizeOptions);
   if (!questions.length) {
@@ -248,18 +266,20 @@ export async function ensurePracticeQuestions(input: {
       difficulty: item.difficulty || difficulty,
       language,
       source: "student_ai" as const,
-      status: "published" as const,
+      // Stay off the curated published bank until admin/reviewer approves.
+      status: "under_review" as const,
       rightsStatus: "not_applicable" as const,
       marks: exam.pattern?.marksPerQuestion || 1.5,
     }));
     await Question.insertMany(docs);
+    const tokens = Math.ceil(JSON.stringify(generated).length / 4);
     await AiUsage.create({
       id: nid(),
       userId: input.studentId,
       provider,
       feature: "practice_generate",
-      tokens: Math.ceil(JSON.stringify(generated).length / 4),
-      estimatedInr: 0,
+      tokens,
+      estimatedInr: estimateAiInr(tokens, provider),
     });
     return docs;
   } catch (error) {
@@ -278,7 +298,7 @@ export async function ensureMockQuestions(input: {
   const existing = await Question.find({
     id: { $in: input.existingIds },
     examId: input.examId,
-    status: "published",
+    status: { $in: ["published", "under_review"] },
   }).lean();
   if (existing.length >= Math.min(input.targetCount, input.existingIds.length || input.targetCount) && existing.length > 0) {
     const byId = new Map(existing.map((question) => [question.id, question]));
@@ -310,7 +330,7 @@ export async function ensureMockQuestions(input: {
     difficulty: "easy" | "medium" | "hard";
     language: "en" | "ta";
     source: "student_ai";
-    status: "published";
+    status: "under_review";
     rightsStatus: "not_applicable";
     marks: number;
   }> = [];
@@ -350,7 +370,7 @@ export async function ensureMockQuestions(input: {
         difficulty: item.difficulty || "medium",
         language,
         source: "student_ai",
-        status: "published",
+        status: "under_review",
         rightsStatus: "not_applicable",
         marks: exam.pattern?.marksPerQuestion || 1.5,
       });
@@ -361,13 +381,14 @@ export async function ensureMockQuestions(input: {
     throw new HttpError(404, "Could not generate mock questions. Update syllabus topics first.", "SYLLABUS_EMPTY");
   }
   await Question.insertMany(created);
+  const tokens = Math.ceil(JSON.stringify(created).length / 4);
   await AiUsage.create({
     id: nid(),
     userId: input.studentId,
     provider: providerUsed,
     feature: "mock_generate",
-    tokens: Math.ceil(JSON.stringify(created).length / 4),
-    estimatedInr: 0,
+    tokens,
+    estimatedInr: estimateAiInr(tokens, providerUsed),
   });
   return created;
 }

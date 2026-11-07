@@ -15,6 +15,7 @@ const links = [
   ["/exams", "Examinations"],
   ["/syllabus", "Syllabus history"],
   ["/questions", "Question bank"],
+  ["/approvals", "Approvals"],
   ["/pyq", "PYQ monitor"],
   ["/ai", "AI providers"],
   ["/support", "Feedback"],
@@ -32,25 +33,25 @@ export function AdminFrame({ children }: { children: React.ReactNode }) {
   }, [router]);
   if (!ready) {
     return (
-      <Box sx={{ minHeight: "100vh", bgcolor: "#f5f7fb", p: { xs: 2, md: 4 } }}>
+      <Box sx={{ minHeight: "100vh", bgcolor: "#F3F4F6", p: { xs: 2, md: 4 } }}>
         <PageSkeleton variant="dashboard" />
       </Box>
     );
   }
   const current = links.find(([href]) => pathname.startsWith(href))?.[1] || "Overview";
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "#f5f7fb" }}>
-      <Box sx={{ display: { xs: "none", md: "flex" }, flexDirection: "column", position: "fixed", width: 248, inset: "0 auto 0 0", bgcolor: "#0E1740", color: "white", p: 2, overflow: "auto" }}>
+    <Box sx={{ minHeight: "100vh", bgcolor: "#F3F4F6" }}>
+      <Box sx={{ display: { xs: "none", md: "flex" }, flexDirection: "column", position: "fixed", width: 248, inset: "0 auto 0 0", bgcolor: "#0B3D2E", color: "white", p: 2, overflow: "auto" }}>
         <Typography sx={{ fontWeight: 800, fontSize: 20, px: 1 }}>ArivuVazhi</Typography>
-        <Typography sx={{ color: "#9AA6C8", fontSize: 11, px: 1, mb: 2 }}>Admin Portal</Typography>
+        <Typography sx={{ color: "#A7F3D0", fontSize: 11, px: 1, mb: 2 }}>Admin Portal</Typography>
         {links.map(([href, label]) => {
           const active = pathname.startsWith(href);
           return (
-            <Button key={href} component={Link} href={href} fullWidth sx={{ justifyContent: "flex-start", color: active ? "white" : "#C9D2EA", bgcolor: active ? "#5B4DFF" : "transparent", borderRadius: 2.5, mb: 0.4 }}>{label}</Button>
+            <Button key={href} component={Link} href={href} fullWidth sx={{ justifyContent: "flex-start", color: active ? "white" : "#D7E8DC", bgcolor: active ? "#16A34A" : "transparent", borderRadius: 2.5, mb: 0.4 }}>{label}</Button>
           );
         })}
       </Box>
-      <Box sx={{ display: { md: "none" }, bgcolor: "#14213d", overflow: "auto", whiteSpace: "nowrap", px: 1, py: 1 }}>
+      <Box sx={{ display: { md: "none" }, bgcolor: "#0B3D2E", overflow: "auto", whiteSpace: "nowrap", px: 1, py: 1 }}>
         {links.map(([href, label]) => (
           <Button key={href} component={Link} href={href} sx={{ color: "white", mr: 0.5 }}>{label}</Button>
         ))}
@@ -67,7 +68,7 @@ export function AdminFrame({ children }: { children: React.ReactNode }) {
 }
 
 export function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <Typography sx={{ color: "#3157d5", fontSize: 11, fontWeight: 800, letterSpacing: 1.3 }}>{children}</Typography>;
+  return <Typography sx={{ color: "#16A34A", fontSize: 11, fontWeight: 800, letterSpacing: 1.3 }}>{children}</Typography>;
 }
 
 export function useData<T>(path: string) {

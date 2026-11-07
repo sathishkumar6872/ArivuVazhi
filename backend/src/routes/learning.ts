@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { detectStudentLanguage, transcribeAudio, tutorReply } from "../ai.js";
+import { assertAiBudgetAvailable, estimateAiInr } from "../ai-budget.js";
 import { dayKey, HttpError, nid, wrap } from "../http.js";
 import { ensureMockQuestions, ensurePracticeQuestions } from "../question-ai.js";
 import { scoreAttempt } from "../scoring.js";
@@ -19,6 +20,9 @@ import {
   SyncReceipt,
   User,
 } from "../models.js";
+
+/** Session-safe: published bank + learner AI items still under review. */
+const SESSION_QUESTION_STATUS = { $in: ["published", "under_review"] } as const;
 
 export const learningRouter = Router();
 learningRouter.use(requireAuth);
@@ -113,7 +117,7 @@ learningRouter.post(
     if (!session) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
     if (session.status !== "active") throw new HttpError(409, "This practice session is already complete", "CONFLICT");
     if (!session.questionIds.includes(body.questionId)) throw new HttpError(400, "Question is not part of this session", "BAD_REQUEST");
-    const question = await Question.findOne({ id: body.questionId, status: "published" });
+    const question = await Question.findOne({ id: body.questionId, status: SESSION_QUESTION_STATUS });
     if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
     const correct = question.correctKey === body.selectedKey;
     const existing = session.answers.find((answer) => answer.questionId === body.questionId);
@@ -215,8 +219,8 @@ learningRouter.post(
     const targetCount =
       mock.questionIds.length ||
       Math.min(25, Math.max(8, exam?.pattern?.totalQuestions ? Math.min(exam.pattern.totalQuestions, 20) : 10));
-    const publishedForMock = await Question.find({ id: { $in: mock.questionIds }, status: "published" }).lean();
-    if (!mock.questionIds.length || publishedForMock.length < Math.min(5, targetCount)) {
+    const readyForMock = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS }).lean();
+    if (!mock.questionIds.length || readyForMock.length < Math.min(5, targetCount)) {
       const generated = await ensureMockQuestions({
         studentId: studentId(req),
         examId: mock.examId,
@@ -228,7 +232,7 @@ learningRouter.post(
     }
 
     if (existing) {
-      const questions = await Question.find({ id: { $in: mock.questionIds }, status: "published" })
+      const questions = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS })
         .select("-correctKey -explanation")
         .lean();
       return res.json({ data: presentAttempt(existing, questions, mock.questionIds) });
@@ -241,7 +245,7 @@ learningRouter.post(
       deadlineAt: new Date(Date.now() + mock.durationMinutes * 60 * 1000),
       idempotencyKey: typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : "",
     });
-    const questions = await Question.find({ id: { $in: mock.questionIds }, status: "published" })
+    const questions = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS })
       .select("-correctKey -explanation")
       .lean();
     res.status(201).json({ data: presentAttempt(attempt, questions, mock.questionIds) });
@@ -283,18 +287,29 @@ learningRouter.put(
     }
     const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
     const allowed = new Set(mock?.questionIds || []);
-    attempt.set(
-      "answers",
-      body.answers
-        .filter((answer) => allowed.has(answer.questionId))
-        .map((answer) => ({
-          questionId: answer.questionId,
-          selectedKey: answer.selectedKey || "",
-          markedForReview: Boolean(answer.markedForReview),
+    const byId = new Map(
+      (attempt.answers as Array<{ questionId: string; selectedKey?: string; markedForReview?: boolean; correct?: boolean; answeredAt?: Date }>).map(
+        (answer) => [answer.questionId, answer],
+      ),
+    );
+    for (const incoming of body.answers) {
+      if (!allowed.has(incoming.questionId)) continue;
+      const prior = byId.get(incoming.questionId);
+      if (prior) {
+        if (typeof incoming.selectedKey === "string") prior.selectedKey = incoming.selectedKey;
+        if (typeof incoming.markedForReview === "boolean") prior.markedForReview = incoming.markedForReview;
+        prior.answeredAt = new Date();
+      } else {
+        byId.set(incoming.questionId, {
+          questionId: incoming.questionId,
+          selectedKey: incoming.selectedKey || "",
+          markedForReview: Boolean(incoming.markedForReview),
           correct: false,
           answeredAt: new Date(),
-        })),
-    );
+        });
+      }
+    }
+    attempt.set("answers", [...byId.values()]);
     if (body.idempotencyKey) attempt.idempotencyKey = body.idempotencyKey;
     await attempt.save();
     res.json({ data: { id: attempt.id, status: attempt.status, saved: true, deadlineAt: attempt.deadlineAt } });
@@ -374,7 +389,9 @@ learningRouter.get(
     if (!attempt) throw new HttpError(404, "Attempt not found", "NOT_FOUND");
     if (attempt.status === "submitted") return res.json({ data: { id: attempt.id, status: attempt.status, redirect: "result" } });
     const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
-    const questions = await Question.find({ id: { $in: mock?.questionIds || [] }, status: "published" }).select("-correctKey -explanation").lean();
+    const questions = await Question.find({ id: { $in: mock?.questionIds || [] }, status: SESSION_QUESTION_STATUS })
+      .select("-correctKey -explanation")
+      .lean();
     res.json({ data: presentAttempt(attempt, questions, mock?.questionIds || []) });
   }),
 );
@@ -536,6 +553,7 @@ learningRouter.post(
     if (used >= (settings.perUserDailyAiLimit || 40)) {
       throw new HttpError(429, "Daily AI Tutor limit reached. Try again tomorrow.", "AI_LIMIT");
     }
+    await assertAiBudgetAvailable("AI Tutor");
     const replyLanguage = detectStudentLanguage(body.message);
     let conversation = body.conversationId
       ? await Conversation.findOne({ id: body.conversationId, studentId: studentId(req) })
@@ -582,7 +600,7 @@ learningRouter.post(
       provider: reply.providerUsed,
       feature: "tutor",
       tokens: reply.tokens,
-      estimatedInr: reply.providerUsed === "openai" ? Math.round((reply.tokens / 1000) * 0.4 * 100) / 100 : 0,
+      estimatedInr: estimateAiInr(reply.tokens, reply.providerUsed),
     });
     res.json({ data: { conversationId: conversation.id, reply: reply.answer, sources: reply.sources, provider: reply.providerUsed } });
   }),
@@ -695,8 +713,8 @@ learningRouter.post(
     const skipped: string[] = [];
     for (const item of body.practiceAnswers) {
       const session = await PracticeSession.findOne({ id: item.sessionId, studentId: studentId(req) });
-      const question = await Question.findOne({ id: item.questionId, status: "published" });
-      if (!session || !question || !session.questionIds.includes(question.id)) {
+      const question = await Question.findOne({ id: item.questionId, status: SESSION_QUESTION_STATUS });
+      if (!session || session.status !== "active" || !question || !session.questionIds.includes(question.id)) {
         skipped.push(item.questionId);
         continue;
       }
@@ -705,6 +723,7 @@ learningRouter.post(
       if (existing) {
         existing.selectedKey = item.selectedKey;
         existing.correct = correct;
+        existing.answeredAt = new Date();
       } else {
         session.answers.push({ questionId: question.id, selectedKey: item.selectedKey, correct, answeredAt: new Date(), markedForReview: false });
       }
