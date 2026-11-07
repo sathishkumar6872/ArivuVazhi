@@ -1,0 +1,14 @@
+:root {
+  --av-primary: #0B3D2E;
+  --av-secondary: #16A34A;
+  --av-accent: #22C55E;
+  --av-highlight: #A3E635;
+  --av-mint: #A7F3D0;
+  --av-surface: #F0FDF4;
+  --av-card: #FFFFFF;
+  --av-text: #0B1F17;
+  --av-success: #10B981;
+  --av-warning: #F59E0B;
+  --av-error: #EF4444;
+  --av-info: #3B82F6;
+}

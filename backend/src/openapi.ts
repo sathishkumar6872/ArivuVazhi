@@ -1,0 +1,32 @@
+export const openApiSpec = {
+  openapi: "3.0.3",
+  info: {
+    title: "ArivuVazhi API",
+    version: "1.0.0",
+    description: "Versioned REST API for the ArivuVazhi student, admin and mobile clients.",
+  },
+  servers: [{ url: "/api/v1" }],
+  components: {
+    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } },
+  },
+  security: [{ bearerAuth: [] }],
+  paths: {
+    "/health": { get: { summary: "Health check", security: [] } },
+    "/auth/register": { post: { summary: "Register a student", security: [] } },
+    "/auth/login": { post: { summary: "Login", security: [] } },
+    "/auth/refresh": { post: { summary: "Rotate refresh token", security: [] } },
+    "/auth/logout": { post: { summary: "Revoke refresh token", security: [] } },
+    "/me": { get: { summary: "Current user" } },
+    "/profile": { patch: { summary: "Update profile" } },
+    "/onboarding": { post: { summary: "Finish onboarding and select an exam" } },
+    "/dashboard": { get: { summary: "Student dashboard" } },
+    "/exams": { get: { summary: "Published exams" } },
+    "/practice/sessions": { post: { summary: "Start practice" } },
+    "/mocks": { get: { summary: "Published mock tests" } },
+    "/tutor/messages": { post: { summary: "Ask the AI Tutor" } },
+    "/sync": { post: { summary: "Idempotent offline practice sync" } },
+    "/admin/overview": { get: { summary: "Admin overview" } },
+    "/admin/questions": { get: { summary: "Question bank" }, post: { summary: "Create a question for review" } },
+    "/admin/approvals": { get: { summary: "Approval queue" } },
+  },
+};

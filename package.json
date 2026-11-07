@@ -1,0 +1,12 @@
+{
+  "name": "arivuvazhi",
+  "private": true,
+  "scripts": {
+    "dev:api": "npm run dev --prefix backend",
+    "dev:student": "npm run dev --prefix student-web",
+    "dev:admin": "npm run dev --prefix admin-portal",
+    "dev:mobile": "npm start --prefix student-mobile",
+    "seed": "npm run seed --prefix backend",
+    "test": "npm test --prefix backend"
+  }
+}
