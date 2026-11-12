@@ -31,7 +31,7 @@ const studentEmail = isProd ? process.env.STUDENT_EMAIL || "" : process.env.STUD
 const studentPassword = isProd ? process.env.STUDENT_PASSWORD || "" : process.env.STUDENT_PASSWORD || DEMO_STUDENT_PASSWORD;
 
 if (isProd) {
-  if (adminPassword.length < 12) throw new Error("ADMIN_PASSWORD must be at least 12 characters in production");
+  if (adminPassword.length < 8) throw new Error("ADMIN_PASSWORD must be at least 8 characters in production");
   if (adminPassword === DEMO_ADMIN_PASSWORD) throw new Error("Refuse production boot with default ADMIN_PASSWORD");
   if ((process.env.JWT_ACCESS_SECRET || "").length < 32) throw new Error("JWT_ACCESS_SECRET must be at least 32 characters in production");
   if ((process.env.JWT_REFRESH_SECRET || "").length < 32) throw new Error("JWT_REFRESH_SECRET must be at least 32 characters in production");
