@@ -576,12 +576,20 @@ learningRouter.post(
     let provider = (settings.aiProvider || "local") as "local" | "chatgpt" | "openai" | "gemini" | "ollama";
     if (provider === "chatgpt" && !chatgptOn) provider = geminiOn ? "gemini" : "local";
     if (provider === "gemini" && !geminiOn) provider = chatgptOn ? "chatgpt" : "local";
+    const history = (conversation.messages || [])
+      .slice(-8)
+      .map((item) => ({
+        role: (item.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+        content: String(item.content || ""),
+      }))
+      .filter((item) => item.content.trim().length > 0);
     const reply = await tutorReply({
       studentId: studentId(req),
       message: body.message,
-      examId: conversation.examId,
+      examId: conversation.examId || body.examId || req.user!.primaryExamId || "",
       provider,
       prompt: settings.activePrompt || "You are ArivuVazhi, a calm government-exam tutor.",
+      history,
       attachment: body.attachment,
     });
     conversation.messages.push({ role: "user", content: body.message, sources: [], createdAt: new Date() });

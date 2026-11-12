@@ -5,6 +5,7 @@ import { Alert, Box, Button, Card, TextField, Typography } from "@mui/material";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/Shell";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { RichText } from "@/components/RichText";
 import { useAuth } from "@/lib/auth";
 
 type Message = { role: "user" | "assistant"; content: string; sources?: string[] };
@@ -78,9 +79,30 @@ export default function TutorPage() {
           </Box>
           <Box sx={{ display: "grid", gap: 1, minHeight: 280 }}>
             {messages.map((message, index) => (
-              <Box key={index} sx={{ justifySelf: message.role === "user" ? "end" : "start", maxWidth: "78%", bgcolor: message.role === "user" ? "#5B4DFF" : "white", color: message.role === "user" ? "white" : "text.primary", border: message.role === "user" ? 0 : "1px solid #EEF1F6", p: 1.6, borderRadius: message.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px" }}>
-                <Typography sx={{ whiteSpace: "pre-wrap" }}>{message.content}</Typography>
-                {!!message.sources?.length && <Typography fontSize={12} sx={{ mt: 1 }}>Sources: {message.sources.join(", ")}</Typography>}
+              <Box
+                key={index}
+                sx={{
+                  justifySelf: message.role === "user" ? "end" : "start",
+                  maxWidth: "82%",
+                  bgcolor: message.role === "user" ? "primary.main" : "background.paper",
+                  color: message.role === "user" ? "primary.contrastText" : "text.primary",
+                  border: message.role === "user" ? 0 : "1px solid",
+                  borderColor: "divider",
+                  p: 1.75,
+                  borderRadius: message.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                  boxShadow: message.role === "assistant" ? "0 6px 18px rgba(11,61,46,0.06)" : "none",
+                }}
+              >
+                {message.role === "assistant" ? (
+                  <RichText content={message.content} tone="ink" />
+                ) : (
+                  <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.55 }}>{message.content}</Typography>
+                )}
+                {!!message.sources?.length && (
+                  <Typography fontSize={12} sx={{ mt: 1, color: "text.secondary", fontWeight: 600 }}>
+                    Sources: {message.sources.join(", ")}
+                  </Typography>
+                )}
               </Box>
             ))}
           </Box>

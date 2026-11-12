@@ -587,6 +587,8 @@ export async function completeChatGptResponse(input: {
   model: string;
   instructions?: string;
   input: ChatGptResponseInput;
+  /** Optional Responses API tools (e.g. web_search) for fresher current-affairs answers. */
+  tools?: Array<Record<string, unknown>>;
 }): Promise<ChatGptCompletion> {
   const token = input.token || (await getChatGptAccessToken());
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -600,6 +602,7 @@ export async function completeChatGptResponse(input: {
       model: input.model,
       ...(input.instructions ? { instructions: input.instructions } : {}),
       input: input.input,
+      ...(input.tools?.length ? { tools: input.tools } : {}),
       store: false,
       stream: true,
     }),

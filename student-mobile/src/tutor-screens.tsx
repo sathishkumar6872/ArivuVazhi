@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import * as ImagePicker from "expo-image-picker";
-import * as DocumentPicker from "expo-document-picker";
-import { File } from "expo-file-system";
-import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { api, type Student } from "./api";
 import { useKeyboardLift } from "./keyboard";
 import type { Route } from "./nav";
 import { useTheme } from "./theme";
 import { Ionicons } from "@expo/vector-icons";
+import { RichText } from "./rich-text";
 import { Banner, Button, Card, Empty, Header, IconButton, Loading, Screen, Segment } from "./ui";
 
 const starters: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; text: string }> = [
@@ -112,12 +109,8 @@ export function ChatScreen({ user, conversationId, starter, back }: { user: Stud
   const [text, setText] = useState(starter || "");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
   const [rated, setRated] = useState<Record<number, string>>({});
-  const [attachment, setAttachment] = useState<{ name: string; mimeType: string; base64: string } | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
   useEffect(() => {
     if (!conversationId) return;
     api<any>(`/tutor/conversations/${conversationId}`).then((conversation) => {
@@ -135,10 +128,12 @@ export function ChatScreen({ user, conversationId, starter, back }: { user: Stud
     setSending(true);
     setMessages((current) => [...current, { role: "user", content: message }]);
     try {
-      const data = await api<any>("/tutor/messages", { method: "POST", body: JSON.stringify({ message, conversationId: thread || undefined, examId: user.primaryExamId, attachment: attachment || undefined }) });
+      const data = await api<any>("/tutor/messages", {
+        method: "POST",
+        body: JSON.stringify({ message, conversationId: thread || undefined, examId: user.primaryExamId }),
+      });
       setThread(data.conversationId);
       setMessages((current) => [...current, { role: "assistant", content: data.reply, sources: (data.sources || []).map((source: any) => source.title || source) }]);
-      setAttachment(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Tutor is unavailable");
     } finally {
@@ -160,10 +155,34 @@ export function ChatScreen({ user, conversationId, starter, back }: { user: Stud
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
         >
           {messages.map((message, index) => (
-            <View key={`${message.role}-${index}`} style={{ alignSelf: message.role === "user" ? "flex-end" : "flex-start", maxWidth: "88%", marginBottom: 10 }}>
-              <View style={{ backgroundColor: message.role === "user" ? palette.green : palette.surface, borderRadius: 16, padding: 12, borderWidth: message.role === "user" ? 0 : 1, borderColor: palette.line }}>
-                <Text style={{ color: message.role === "user" ? palette.greenInk : palette.ink, lineHeight: 20 }}>{message.content}</Text>
-                {message.sources?.length ? <Text style={{ color: palette.muted, marginTop: 6, fontSize: 12 }}>Sources: {message.sources.join(", ")}</Text> : null}
+            <View key={`${message.role}-${index}`} style={{ alignSelf: message.role === "user" ? "flex-end" : "flex-start", maxWidth: "90%", marginBottom: 10 }}>
+              <View
+                style={{
+                  backgroundColor: message.role === "user" ? palette.green : palette.surface,
+                  borderRadius: message.role === "user" ? 16 : 18,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  borderWidth: message.role === "user" ? 0 : 1,
+                  borderColor: palette.line,
+                  borderBottomLeftRadius: message.role === "assistant" ? 6 : 16,
+                  borderBottomRightRadius: message.role === "user" ? 6 : 16,
+                  shadowColor: palette.shadow,
+                  shadowOpacity: message.role === "assistant" ? 0.08 : 0,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 2 },
+                  elevation: message.role === "assistant" ? 1 : 0,
+                }}
+              >
+                {message.role === "assistant" ? (
+                  <RichText content={message.content} tone="ink" />
+                ) : (
+                  <Text style={{ color: palette.greenInk, lineHeight: 22, fontSize: 15 }}>{message.content}</Text>
+                )}
+                {message.sources?.length ? (
+                  <Text style={{ color: palette.muted, marginTop: 8, fontSize: 12, fontWeight: "600" }}>
+                    Sources: {message.sources.join(", ")}
+                  </Text>
+                ) : null}
               </View>
               {message.role === "assistant" && (
                 <View style={{ flexDirection: "row", gap: 6, marginTop: 6 }}>
@@ -192,70 +211,9 @@ export function ChatScreen({ user, conversationId, starter, back }: { user: Stud
           {error ? <Banner message={error} /> : null}
         </ScrollView>
 
-        {/* WhatsApp-style: dock lifts with keyboard so input sits flush above it */}
+        {/* Text-only composer for now (image / document / voice deferred). */}
         <View style={{ marginBottom: keyboardLift, backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.line }}>
-          {attachment ? (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8 }}>
-              <Ionicons name="attach" size={16} color={palette.green} />
-              <Text style={{ flex: 1, minWidth: 0, color: palette.green, fontWeight: "700" }} numberOfLines={1}>{attachment.name}</Text>
-              <IconButton label="Remove attachment" icon="close" tone="ghost" onPress={() => setAttachment(null)} />
-            </View>
-          ) : null}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 }}>
-            <IconButton
-              label="Attach image"
-              icon="image-outline"
-              tone="ghost"
-              onPress={async () => {
-                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.35 });
-                if (result.canceled) return;
-                const asset = result.assets[0];
-                if (!asset.base64 || asset.base64.length > 780000) { setError("Choose a smaller image."); return; }
-                setAttachment({ name: asset.fileName || "question.jpg", mimeType: asset.mimeType || "image/jpeg", base64: asset.base64 });
-              }}
-            />
-            <IconButton
-              label="Attach document"
-              icon="document-outline"
-              tone="ghost"
-              onPress={async () => {
-                const result = await DocumentPicker.getDocumentAsync({ type: ["application/pdf", "text/plain"], copyToCacheDirectory: true, base64: true });
-                if (result.canceled) return;
-                const asset = result.assets[0];
-                const base64 = asset.base64 || await new File(asset.uri).base64();
-                if (base64.length > 780000) { setError("Choose a PDF or text file smaller than 600 KB."); return; }
-                setAttachment({ name: asset.name, mimeType: asset.mimeType || "application/pdf", base64 });
-              }}
-            />
-            <IconButton
-              label={recorderState.isRecording ? "Stop voice question" : "Record voice question"}
-              icon={recorderState.isRecording ? "stop" : "mic-outline"}
-              tone={recorderState.isRecording ? "danger" : "ghost"}
-              loading={transcribing}
-              onPress={async () => {
-                if (!recorderState.isRecording) {
-                  const permission = await AudioModule.requestRecordingPermissionsAsync();
-                  if (!permission.granted) { setError("Microphone permission was not granted."); return; }
-                  await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-                  await recorder.prepareToRecordAsync();
-                  recorder.record();
-                  return;
-                }
-                await recorder.stop();
-                if (!recorder.uri) return;
-                const base64 = await new File(recorder.uri).base64();
-                if (base64.length > 780000) { setError("Voice question is too long. Record a shorter question."); return; }
-                setTranscribing(true);
-                try {
-                  const result = await api<{ text: string }>("/tutor/transcribe", { method: "POST", body: JSON.stringify({ name: "question.m4a", mimeType: "audio/mp4", base64 }) });
-                  setText(result.text);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Could not transcribe");
-                } finally {
-                  setTranscribing(false);
-                }
-              }}
-            />
             <TextInput
               value={text}
               onChangeText={setText}
