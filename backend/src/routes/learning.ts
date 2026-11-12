@@ -4,12 +4,14 @@ import { requireAuth } from "../auth.js";
 import { detectStudentLanguage, transcribeAudio, tutorReply } from "../ai.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "../ai-budget.js";
 import { dayKey, HttpError, nid, wrap } from "../http.js";
-import { ensureMockQuestions, ensurePracticeQuestions } from "../question-ai.js";
+import { ensurePracticeQuestions, pickMockQuestionIds, visibleToStudent } from "../question-ai.js";
 import { scoreAttempt } from "../scoring.js";
+import { escapeRegex } from "../governance.js";
 import {
   AiUsage,
   AppConfig,
   Conversation,
+  DailyMockSet,
   Exam,
   MemoryItem,
   MockAttempt,
@@ -18,13 +20,28 @@ import {
   PyqPaper,
   Question,
   SyncReceipt,
+  Topic,
   User,
 } from "../models.js";
 
-/** Session-safe: published bank + learner AI items still under review. */
-const SESSION_QUESTION_STATUS = { $in: ["published", "under_review"] } as const;
+
 
 export const learningRouter = Router();
+
+/** Per-student daily AI request cap (Asia/Kolkata day), shared by tutor and voice input. */
+async function assertDailyAiLimit(userId: string, feature: string) {
+  const [settings, used] = await Promise.all([
+    AppConfig.findOne({ id: "app" }).select("perUserDailyAiLimit").lean(),
+    AiUsage.countDocuments({ userId, feature: { $in: ["tutor", "transcribe"] }, createdAt: { $gte: startOfIstDay() } }),
+  ]);
+  if (used >= (settings?.perUserDailyAiLimit || 40)) {
+    throw new HttpError(429, `Daily ${feature} limit reached. Try again tomorrow.`, "AI_LIMIT");
+  }
+}
+
+function startOfIstDay() {
+  return new Date(`${dayKey()}T00:00:00+05:30`);
+}
 learningRouter.use(requireAuth);
 
 function studentId(req: { user?: { id: string; role: string } }) {
@@ -59,7 +76,7 @@ learningRouter.post(
       })
       .parse(req.body);
     const count = body.count || 5;
-    const picked = await ensurePracticeQuestions({
+    const prepared = await ensurePracticeQuestions({
       studentId: studentId(req),
       examId: body.examId,
       topicId: body.topicId,
@@ -72,14 +89,15 @@ learningRouter.post(
       examId: body.examId,
       topicId: body.topicId || "",
       difficulty: body.difficulty || "",
-      questionIds: picked.map((question) => question.id),
+      questionIds: prepared.questions.map((question) => question.id),
     });
     res.status(201).json({
       data: {
         id: session.id,
         status: session.status,
-        generated: picked.some((question) => question.source === "student_ai"),
-        questions: picked.map((question) => visibleQuestion(question)),
+        generated: prepared.generatedLive > 0,
+        repeated: prepared.repeated,
+        questions: prepared.questions.map((question) => visibleQuestion(question)),
       },
     });
   }),
@@ -117,7 +135,7 @@ learningRouter.post(
     if (!session) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
     if (session.status !== "active") throw new HttpError(409, "This practice session is already complete", "CONFLICT");
     if (!session.questionIds.includes(body.questionId)) throw new HttpError(400, "Question is not part of this session", "BAD_REQUEST");
-    const question = await Question.findOne({ id: body.questionId, status: SESSION_QUESTION_STATUS });
+    const question = await Question.findOne({ id: body.questionId, ...visibleToStudent(studentId(req)) });
     if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
     const correct = question.correctKey === body.selectedKey;
     const existing = session.answers.find((answer) => answer.questionId === body.questionId);
@@ -179,8 +197,12 @@ learningRouter.get(
     const filter: Record<string, unknown> = { status: "published" };
     if (typeof req.query.examId === "string") filter.examId = req.query.examId;
     const mocks = await MockTest.find(filter).lean();
-    const attempts = await MockAttempt.find({ studentId: studentId(req) }).sort({ createdAt: -1 }).lean();
     const today = dayKey();
+    const [attempts, sets] = await Promise.all([
+      MockAttempt.find({ studentId: studentId(req) }).sort({ createdAt: -1 }).lean(),
+      DailyMockSet.find({ studentId: studentId(req), dayKey: today }).select("mockId status").lean(),
+    ]);
+    const setStatus = new Map(sets.map((set) => [set.mockId, set.status]));
     res.json({
       data: mocks.map((mock) => {
         const mine = attempts.filter((attempt) => attempt.mockId === mock.id);
@@ -196,6 +218,8 @@ learningRouter.get(
           negativeMarks: mock.negativeMarks,
           instructions: mock.instructions,
           todayStatus: todayAttempt?.status || "available",
+          /** ready = personal set generated at 02:00 IST; otherwise the approved bank is used. */
+          todaySet: setStatus.get(mock.id) || "not_prepared",
           todayAttemptId: todayAttempt?.id || "",
           lastScore: lastSubmitted ? { rawScore: lastSubmitted.rawScore, maxScore: lastSubmitted.maxScore } : null,
         };
@@ -215,42 +239,100 @@ learningRouter.post(
       throw new HttpError(409, "You already submitted this mock today. One attempt is allowed per mock per day.", "DAILY_LIMIT");
     }
 
-    const exam = await Exam.findOne({ id: mock.examId }).lean();
-    const targetCount =
-      mock.questionIds.length ||
-      Math.min(25, Math.max(8, exam?.pattern?.totalQuestions ? Math.min(exam.pattern.totalQuestions, 20) : 10));
-    const readyForMock = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS }).lean();
-    if (!mock.questionIds.length || readyForMock.length < Math.min(5, targetCount)) {
-      const generated = await ensureMockQuestions({
-        studentId: studentId(req),
-        examId: mock.examId,
-        existingIds: mock.questionIds,
-        targetCount,
-      });
-      mock.questionIds = generated.map((question) => question.id);
-      await mock.save();
+    if (existing && existing.status === "in_progress" && existing.deadlineAt < new Date()) {
+      await submitAttempt(existing);
+      throw new HttpError(409, "Time ran out on today's attempt. It was submitted with your saved answers.", "TIME_UP");
+    }
+    if (existing) {
+      const ids = attemptQuestionIds(existing, mock);
+      const questions = await Question.find({ id: { $in: ids } }).select("-correctKey -explanation").lean();
+      return res.json({ data: presentAttempt(existing, questions, ids) });
     }
 
-    if (existing) {
-      const questions = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS })
-        .select("-correctKey -explanation")
-        .lean();
-      return res.json({ data: presentAttempt(existing, questions, mock.questionIds) });
+    const exam = await Exam.findOne({ id: mock.examId }).select("pattern").lean();
+    const targetCount = Math.min(100, Math.max(5, exam?.pattern?.totalQuestions || 20));
+    // Freeze the question set and marking rules on the attempt; never mutate the shared mock.
+    const dailySet = await DailyMockSet.findOne({ studentId: studentId(req), mockId: mock.id, dayKey: today, status: "ready" }).lean();
+    if (!dailySet) {
+      const pending = await DailyMockSet.exists({ studentId: studentId(req), mockId: mock.id, dayKey: today, status: "generating" });
+      if (pending) throw new HttpError(409, "Today's mock is still being prepared. Please try again in a minute.", "MOCK_PREPARING");
     }
-    const attempt = await MockAttempt.create({
-      id: nid(),
-      mockId: mock.id,
-      studentId: studentId(req),
-      dayKey: today,
-      deadlineAt: new Date(Date.now() + mock.durationMinutes * 60 * 1000),
-      idempotencyKey: typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : "",
-    });
-    const questions = await Question.find({ id: { $in: mock.questionIds }, status: SESSION_QUESTION_STATUS })
-      .select("-correctKey -explanation")
-      .lean();
-    res.status(201).json({ data: presentAttempt(attempt, questions, mock.questionIds) });
+    const questionIds = dailySet?.questionIds.length
+      ? [...dailySet.questionIds]
+      : await pickMockQuestionIds({
+          studentId: studentId(req),
+          examId: mock.examId,
+          configuredIds: mock.questionIds,
+          targetCount,
+        });
+    let attempt;
+    try {
+      attempt = await MockAttempt.create({
+        id: nid(),
+        mockId: mock.id,
+        studentId: studentId(req),
+        dayKey: today,
+        questionIds,
+        marksPerQuestion: mock.marksPerQuestion,
+        negativeMarks: mock.negativeMarks,
+        deadlineAt: new Date(Date.now() + mock.durationMinutes * 60 * 1000),
+        idempotencyKey: typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : "",
+      });
+    } catch (error) {
+      // A double click or retry raced us to the unique (student, mock, day) index: reuse that attempt.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      const raced = await MockAttempt.findOne({ studentId: studentId(req), mockId: mock.id, dayKey: today });
+      if (!raced) throw error;
+      attempt = raced;
+    }
+    const ids = attemptQuestionIds(attempt, mock);
+    const questions = await Question.find({ id: { $in: ids } }).select("-correctKey -explanation").lean();
+    res.status(201).json({ data: presentAttempt(attempt, questions, ids) });
   }),
 );
+
+/** Attempts created before snapshots existed fall back to the mock's current list. */
+function attemptQuestionIds(attempt: { questionIds?: string[] | null }, mock?: { questionIds?: string[] } | null): string[] {
+  return attempt.questionIds?.length ? [...attempt.questionIds] : [...(mock?.questionIds || [])];
+}
+
+function attemptRules(
+  attempt: { marksPerQuestion?: number | null; negativeMarks?: number | null },
+  mock?: { marksPerQuestion?: number; negativeMarks?: number } | null,
+) {
+  return {
+    marksPerQuestion: attempt.marksPerQuestion ?? mock?.marksPerQuestion ?? 1,
+    negativeMarks: attempt.negativeMarks ?? mock?.negativeMarks ?? 0,
+  };
+}
+
+/** Topics with the most wrong or skipped answers in a submitted attempt. */
+async function weakAreas(
+  answers: Array<{ questionId: string; selectedKey?: string | null; correct?: boolean | null }>,
+  byQuestionId: Map<string, { topicId: string }>,
+) {
+  const tally = new Map<string, { total: number; correct: number }>();
+  for (const answer of answers) {
+    const question = byQuestionId.get(answer.questionId);
+    if (!question?.topicId) continue;
+    const row = tally.get(question.topicId) || { total: 0, correct: 0 };
+    row.total += 1;
+    if (answer.correct) row.correct += 1;
+    tally.set(question.topicId, row);
+  }
+  const topics = await Topic.find({ id: { $in: [...tally.keys()] } }).select("id name nameEn").lean();
+  const names = new Map(topics.map((topic) => [topic.id, topic.nameEn || topic.name]));
+  return [...tally.entries()]
+    .map(([topicId, row]) => ({
+      topicId,
+      topic: names.get(topicId) || "Topic",
+      attempted: row.total,
+      accuracy: Math.round((row.correct / row.total) * 100),
+    }))
+    .filter((row) => row.accuracy < 60)
+    .sort((left, right) => left.accuracy - right.accuracy)
+    .slice(0, 5);
+}
 
 function presentAttempt(
   attempt: { id: string; mockId: string; status: string; deadlineAt: Date; answers: unknown; startedAt: Date },
@@ -285,8 +367,8 @@ learningRouter.put(
       await submitAttempt(attempt);
       throw new HttpError(409, "Time is up. The attempt was submitted with saved answers.", "TIME_UP");
     }
-    const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
-    const allowed = new Set(mock?.questionIds || []);
+    const mock = attempt.questionIds?.length ? null : await MockTest.findOne({ id: attempt.mockId }).lean();
+    const allowed = new Set(attemptQuestionIds(attempt, mock));
     const byId = new Map(
       (attempt.answers as Array<{ questionId: string; selectedKey?: string; markedForReview?: boolean; correct?: boolean; answeredAt?: Date }>).map(
         (answer) => [answer.questionId, answer],
@@ -319,22 +401,24 @@ learningRouter.put(
 async function submitAttempt(attempt: any) {
   if (attempt.status === "submitted") return attempt;
   const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
-  if (!mock) throw new HttpError(404, "Mock test not found", "NOT_FOUND");
-  const questions = await Question.find({ id: { $in: mock.questionIds } }).lean();
+  if (!mock && !attempt.questionIds?.length) throw new HttpError(404, "Mock test not found", "NOT_FOUND");
+  const questionIds = attemptQuestionIds(attempt, mock);
+  const questions = await Question.find({ id: { $in: questionIds } }).lean();
+  const byQuestionId = new Map(questions.map((question) => [question.id, question]));
   const selected = new Map(
     (attempt.answers as Array<{ selectedKey?: string; questionId: string }>)
       .filter((answer) => answer.selectedKey)
       .map((answer) => [answer.questionId, answer.selectedKey]),
   );
-  const states = mock.questionIds.map((questionId) => {
-    const question = questions.find((item) => item.id === questionId);
+  const states = questionIds.map((questionId) => {
+    const question = byQuestionId.get(questionId);
     const choice = selected.get(questionId);
     if (!question || !choice) return null;
     return question.correctKey === choice;
   });
-  const scored = scoreAttempt(states, { marksPerQuestion: mock.marksPerQuestion, negativeMarks: mock.negativeMarks });
-  attempt.set("answers", mock.questionIds.map((questionId: string) => {
-    const question = questions.find((item) => item.id === questionId);
+  const scored = scoreAttempt(states, attemptRules(attempt, mock));
+  attempt.set("answers", questionIds.map((questionId: string) => {
+    const question = byQuestionId.get(questionId);
     const choice = selected.get(questionId) || "";
     return {
       questionId,
@@ -385,14 +469,14 @@ function resultPayload(attempt: any) {
 learningRouter.get(
   "/mocks/attempts/:id",
   wrap(async (req, res) => {
-    const attempt = await MockAttempt.findOne({ id: req.params.id, studentId: studentId(req) }).lean();
+    const attempt = await MockAttempt.findOne({ id: req.params.id, studentId: studentId(req) });
     if (!attempt) throw new HttpError(404, "Attempt not found", "NOT_FOUND");
+    if (attempt.status === "in_progress" && attempt.deadlineAt < new Date()) await submitAttempt(attempt);
     if (attempt.status === "submitted") return res.json({ data: { id: attempt.id, status: attempt.status, redirect: "result" } });
-    const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
-    const questions = await Question.find({ id: { $in: mock?.questionIds || [] }, status: SESSION_QUESTION_STATUS })
-      .select("-correctKey -explanation")
-      .lean();
-    res.json({ data: presentAttempt(attempt, questions, mock?.questionIds || []) });
+    const mock = attempt.questionIds?.length ? null : await MockTest.findOne({ id: attempt.mockId }).lean();
+    const ids = attemptQuestionIds(attempt, mock);
+    const questions = await Question.find({ id: { $in: ids } }).select("-correctKey -explanation").lean();
+    res.json({ data: presentAttempt(attempt, questions, ids) });
   }),
 );
 
@@ -403,13 +487,16 @@ learningRouter.get(
     if (!attempt) throw new HttpError(404, "Attempt not found", "NOT_FOUND");
     if (attempt.status !== "submitted") throw new HttpError(409, "Submit the attempt before reviewing answers", "CONFLICT");
     const mock = await MockTest.findOne({ id: attempt.mockId }).lean();
-    const questions = await Question.find({ id: { $in: mock?.questionIds || [] } }).lean();
+    const ids = attemptQuestionIds(attempt, mock);
+    const questions = await Question.find({ id: { $in: ids } }).lean();
+    const byQuestionId = new Map(questions.map((question) => [question.id, question]));
     res.json({
       data: {
         ...resultPayload(attempt),
         title: mock?.title,
-        questions: (mock?.questionIds || []).map((id) => {
-          const question = questions.find((item) => item.id === id);
+        weakAreas: await weakAreas(attempt.answers, byQuestionId),
+        questions: ids.map((id) => {
+          const question = byQuestionId.get(id);
           const answer = attempt.answers.find((item) => item.questionId === id);
           if (!question) return null;
           return {
@@ -540,24 +627,21 @@ learningRouter.post(
         }).optional(),
       })
       .parse(req.body);
-    const settings = (await AppConfig.findOne({ id: "app" }).lean()) || {
+    const [storedSettings, conversationFound] = await Promise.all([
+      AppConfig.findOne({ id: "app" }).lean(),
+      body.conversationId ? Conversation.findOne({ id: body.conversationId, studentId: studentId(req) }) : Promise.resolve(null),
+      assertDailyAiLimit(studentId(req), "AI Tutor"),
+      assertAiBudgetAvailable("AI Tutor"),
+    ]);
+    const settings = storedSettings || {
       aiProvider: "local" as "local" | "chatgpt" | "openai" | "gemini" | "ollama",
       chatgptEnabled: false as boolean | undefined,
       geminiEnabled: false as boolean | undefined,
       activePrompt: "You are ArivuVazhi, a calm government-exam tutor.",
       perUserDailyAiLimit: 40,
     };
-    const since = new Date();
-    since.setHours(0, 0, 0, 0);
-    const used = await AiUsage.countDocuments({ userId: studentId(req), createdAt: { $gte: since } });
-    if (used >= (settings.perUserDailyAiLimit || 40)) {
-      throw new HttpError(429, "Daily AI Tutor limit reached. Try again tomorrow.", "AI_LIMIT");
-    }
-    await assertAiBudgetAvailable("AI Tutor");
     const replyLanguage = detectStudentLanguage(body.message);
-    let conversation = body.conversationId
-      ? await Conversation.findOne({ id: body.conversationId, studentId: studentId(req) })
-      : null;
+    let conversation = conversationFound;
     if (body.conversationId && !conversation) throw new HttpError(404, "Conversation not found", "NOT_FOUND");
     if (!conversation) {
       conversation = await Conversation.create({
@@ -591,25 +675,25 @@ learningRouter.post(
       prompt: settings.activePrompt || "You are ArivuVazhi, a calm government-exam tutor.",
       history,
       attachment: body.attachment,
+      useMemory: Boolean(req.user!.aiMemoryEnabled),
     });
     conversation.messages.push({ role: "user", content: body.message, sources: [], createdAt: new Date() });
     conversation.messages.push({ role: "assistant", content: reply.answer, sources: reply.sources.map((source) => source.title), createdAt: new Date() });
-    await conversation.save();
-    const user = await User.findOne({ id: studentId(req) }).lean();
-    if (user?.aiMemoryEnabled) {
-      const weak = /weak|struggle|difficult|கடினம்|புரியல/i.test(body.message);
-      if (weak) {
-        await MemoryItem.create({ id: nid(), studentId: studentId(req), text: `Asked for help: ${body.message.slice(0, 180)}` });
-      }
-    }
-    await AiUsage.create({
+    const weak = req.user!.aiMemoryEnabled && /weak|struggle|difficult|கடினம்|புரியல/i.test(body.message);
+    await Promise.all([
+      conversation.save(),
+      weak
+        ? MemoryItem.create({ id: nid(), studentId: studentId(req), text: `Asked for help: ${body.message.slice(0, 180)}` })
+        : Promise.resolve(),
+      AiUsage.create({
       id: nid(),
       userId: studentId(req),
       provider: reply.providerUsed,
       feature: "tutor",
       tokens: reply.tokens,
       estimatedInr: estimateAiInr(reply.tokens, reply.providerUsed),
-    });
+      }),
+    ]);
     res.json({ data: { conversationId: conversation.id, reply: reply.answer, sources: reply.sources, provider: reply.providerUsed } });
   }),
 );
@@ -622,8 +706,11 @@ learningRouter.post(
       mimeType: z.string().min(3).max(100),
       base64: z.string().min(1).max(800_000),
     }).parse(req.body);
+    await Promise.all([assertDailyAiLimit(studentId(req), "Voice input"), assertAiBudgetAvailable("Voice input")]);
     const text = await transcribeAudio(body);
     if (!text) throw new HttpError(503, "Voice transcription needs a valid OpenAI API key and a supported audio recording.", "AI_UNAVAILABLE");
+    const tokens = Math.ceil(text.length / 4);
+    await AiUsage.create({ id: nid(), userId: studentId(req), provider: "openai", feature: "transcribe", tokens, estimatedInr: estimateAiInr(tokens, "openai") });
     res.json({ data: { text } });
   }),
 );
@@ -633,13 +720,16 @@ learningRouter.get(
   wrap(async (req, res) => {
     const filter: Record<string, unknown> = { studentId: studentId(req) };
     if (typeof req.query.examId === "string" && req.query.examId) filter.examId = req.query.examId;
-    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-    const conversations = await Conversation.find(filter).sort({ updatedAt: -1 }).limit(40).lean();
-    const filtered = q
-      ? conversations.filter((conversation) =>
-          `${conversation.title} ${conversation.messages.map((message) => message.content).join(" ")}`.toLowerCase().includes(q.toLowerCase()),
-        )
-      : conversations;
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+    if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      filter.$or = [{ title: pattern }, { "messages.content": pattern }];
+    }
+    const filtered = await Conversation.find(filter)
+      .sort({ updatedAt: -1 })
+      .limit(40)
+      .select({ id: 1, title: 1, examId: 1, language: 1, updatedAt: 1, messages: { $slice: -1 } })
+      .lean();
     res.json({
       data: filtered.map((conversation) => ({
         id: conversation.id,
@@ -694,6 +784,15 @@ learningRouter.patch(
   }),
 );
 
+learningRouter.delete(
+  "/tutor/memory/:id",
+  wrap(async (req, res) => {
+    const result = await MemoryItem.deleteOne({ id: req.params.id, studentId: studentId(req) });
+    if (!result.deletedCount) throw new HttpError(404, "Memory item not found", "NOT_FOUND");
+    res.json({ data: { removed: true } });
+  }),
+);
+
 learningRouter.post(
   "/tutor/memory/reset",
   wrap(async (req, res) => {
@@ -721,7 +820,7 @@ learningRouter.post(
     const skipped: string[] = [];
     for (const item of body.practiceAnswers) {
       const session = await PracticeSession.findOne({ id: item.sessionId, studentId: studentId(req) });
-      const question = await Question.findOne({ id: item.questionId, status: SESSION_QUESTION_STATUS });
+      const question = await Question.findOne({ id: item.questionId, ...visibleToStudent(studentId(req)) });
       if (!session || session.status !== "active" || !question || !session.questionIds.includes(question.id)) {
         skipped.push(item.questionId);
         continue;

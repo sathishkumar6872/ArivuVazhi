@@ -39,10 +39,13 @@ export function signAccess(user: { id: string; role: string }) {
 }
 
 export function signRefresh(userId: string) {
-  return jwt.sign({ sub: userId, typ: "refresh" }, config.jwtRefreshSecret, { expiresIn: "30d" });
+  // jti keeps two tokens issued in the same second distinct (unique tokenHash index).
+  return jwt.sign({ sub: userId, typ: "refresh" }, config.jwtRefreshSecret, { expiresIn: "30d", jwtid: nid() });
 }
 
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
+  // Routers mounted on the same /api/v1 prefix each run this; verify once per request.
+  if (req.user) return next();
   try {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required", "UNAUTHORIZED");

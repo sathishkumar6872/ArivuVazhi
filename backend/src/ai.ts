@@ -269,6 +269,8 @@ export async function tutorReply(input: {
   prompt: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
   attachment?: { name: string; mimeType: string; base64: string };
+  /** False when the student has disabled AI learning memory. */
+  useMemory?: boolean;
 }) {
   let documentText = "";
   let image: { mimeType: string; base64: string } | undefined;
@@ -287,11 +289,14 @@ export async function tutorReply(input: {
     .join("\n");
   // Retrieve from the latest ask only — full chat history was pulling unrelated old notes into answers.
   const freshAsk = wantsFreshFacts(query);
-  const [chunks, syllabus] = await Promise.all([
+  const [chunks, syllabus, memoryDocs] = await Promise.all([
     freshAsk ? Promise.resolve([] as RetrievedChunk[]) : retrieve(query, input.examId),
     syllabusOutline(input.examId, `${historyText}\n${query}`),
+    // Disabled memory must not influence answers, not just stop being written.
+    input.useMemory === false
+      ? Promise.resolve([] as Array<{ text: string }>)
+      : MemoryItem.find({ studentId: input.studentId, active: true }).limit(8).lean(),
   ]);
-  const memoryDocs = await MemoryItem.find({ studentId: input.studentId, active: true }).limit(8).lean();
   const memory = memoryDocs.map((item) => item.text);
   const context =
     [chunks.map((chunk) => `[${chunk.title}] ${chunk.text}`).join("\n\n"), syllabus]
@@ -313,7 +318,7 @@ Approved notes are static study notes, not a live news feed. Never present those
 For current affairs / “who is now” / latest updates: use live web search when available; otherwise answer with the best current knowledge and say the learner should verify on the official site. Do not claim your knowledge ends in 2023/2024 if web search ran.
 Hard limits only: never invent official notification dates, vacancies, cut-offs, or eligibility changes as confirmed facts without a source; never invent a hidden official answer key; do not calculate official mock marks.
 Prefer answering over refusing. Use conversation history so you do not re-ask facts the student already gave (e.g. Group 4).
-Do not say "I cannot answer because no approved source" for normal study questions — explain the concept instead.
+Grounding: base factual exam content on the approved context below. If it does not cover the question, you may still teach the general concept, but say in one short line that this is general guidance not yet verified against ArivuVazhi's approved notes, and flag anything you are unsure about instead of guessing.
 Links: keep answers short. Do NOT paste long gallery/news URLs. For “who is CM / current affairs”, give the name + date in 1–2 lines; add at most one short markdown link like [tn.gov.in](https://www.tn.gov.in) only if the student asks for a source or verification. Never include utm_source tracking params. For normal concept teaching, no links.
 Approved / syllabus context:
 ${context}

@@ -38,6 +38,13 @@ export function AdminFrame({ children }: { children: React.ReactNode }) {
       </Box>
     );
   }
+  async function logout() {
+    const refreshToken = localStorage.getItem("av_admin_refresh");
+    if (refreshToken) await api("/auth/logout", { method: "POST", body: JSON.stringify({ refreshToken }) }).catch(() => undefined);
+    localStorage.removeItem("av_admin_access");
+    localStorage.removeItem("av_admin_refresh");
+    router.push("/login");
+  }
   const current = links.find(([href]) => pathname.startsWith(href))?.[1] || "Overview";
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#F3F4F6" }}>
@@ -59,7 +66,7 @@ export function AdminFrame({ children }: { children: React.ReactNode }) {
       <Box sx={{ ml: { md: "252px" } }}>
         <Box sx={{ height: 72, display: "flex", alignItems: "center", justifyContent: "space-between", px: 3 }}>
           <Typography sx={{ fontWeight: 800, fontSize: 20 }}>{current}</Typography>
-          <Button onClick={() => { localStorage.removeItem("av_admin_access"); localStorage.removeItem("av_admin_refresh"); router.push("/login"); }}>Logout</Button>
+          <Button onClick={logout}>Logout</Button>
         </Box>
         <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1200 }}>{children}</Box>
       </Box>

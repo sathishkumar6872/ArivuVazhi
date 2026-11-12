@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { Eyebrow, PageSkeleton, useData } from "@/components/Frame";
 
 type ApprovalItem = {
-  type: "question" | "topic" | "source" | "pyq";
+  type: "question" | "subject" | "topic" | "source" | "pyq";
   id: string;
   title: string;
   status: string;

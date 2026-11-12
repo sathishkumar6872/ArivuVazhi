@@ -1,18 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Alert, Box, Button, Card, MenuItem, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, IconButton, MenuItem, TextField, Typography } from "@mui/material";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import { api, type User } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Eyebrow } from "@/components/Shell";
 
 type Memory = { enabled: boolean; items: Array<{ id: string; text: string }> };
+type Note = { id: string; body: string; topicId?: string; createdAt?: string };
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth();
   const [form, setForm] = useState({ firstName: "", lastName: "", phone: "", language: "en" as "en" | "ta" });
   const [memory, setMemory] = useState<Memory>({ enabled: true, items: [] });
   const [note, setNote] = useState("");
+  const [notes, setNotes] = useState<Note[] | null>(null);
+  const [notesError, setNotesError] = useState("");
   const [message, setMessage] = useState("");
   const [examName, setExamName] = useState("");
   const [year, setYear] = useState("");
@@ -23,6 +27,23 @@ export default function ProfilePage() {
     setForm({ firstName: user.firstName, lastName: user.lastName, phone: user.phone || "", language: user.language });
     api<Memory>("/tutor/memory").then(setMemory).catch(() => undefined);
   }, [user]);
+
+  async function loadNotes() {
+    setNotes(await api<Note[]>("/notes"));
+  }
+  useEffect(() => {
+    loadNotes().catch((err) => { setNotesError(err instanceof Error ? err.message : "Could not load notes"); setNotes([]); });
+  }, []);
+
+  async function deleteNote(id: string) {
+    setNotesError("");
+    try {
+      await api(`/notes/${id}`, { method: "DELETE" });
+      setNotes((current) => (current || []).filter((item) => item.id !== id));
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : "Could not delete note");
+    }
+  }
 
   async function saveProfile() {
     await api<User>("/profile", { method: "PATCH", body: JSON.stringify(form) });
@@ -41,6 +62,7 @@ export default function ProfilePage() {
     await api("/notes", { method: "POST", body: JSON.stringify({ body: note }) });
     setNote("");
     setMessage("Note saved");
+    await loadNotes().catch(() => undefined);
   }
 
   return (
@@ -71,7 +93,19 @@ export default function ProfilePage() {
             <Button color="warning" onClick={async () => { await api("/tutor/memory/reset", { method: "POST" }); setMemory({ ...memory, items: [] }); }}>Reset memory</Button>
           </Box>
           <TextField label="Private note" fullWidth margin="normal" multiline value={note} onChange={(event) => setNote(event.target.value)} />
-          <Button onClick={() => saveNote().catch((err) => setMessage(err.message))}>Save note</Button>
+          <Button disabled={!note.trim()} onClick={() => saveNote().catch((err) => setMessage(err.message))}>Save note</Button>
+          <Typography fontWeight={800} sx={{ mt: 2 }}>My notes</Typography>
+          {notesError && <Alert severity="error" sx={{ my: 1 }}>{notesError}</Alert>}
+          {notes && !notes.length && !notesError && <Typography color="text.secondary" sx={{ my: 1 }}>No notes yet.</Typography>}
+          {(notes || []).map((item) => (
+            <Box key={item.id} sx={{ display: "flex", alignItems: "flex-start", gap: 1, py: 1, borderBottom: "1px solid #EEF1F6" }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{item.body}</Typography>
+                {item.createdAt && <Typography color="text.secondary" fontSize={12}>{new Date(item.createdAt).toLocaleString()}</Typography>}
+              </Box>
+              <IconButton size="small" aria-label="Delete note" onClick={() => deleteNote(item.id)}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton>
+            </Box>
+          ))}
         </Card>
       </Box>
       <Card sx={{ p: 2, mt: 2 }}>

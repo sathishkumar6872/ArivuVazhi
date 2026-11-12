@@ -4,7 +4,8 @@ import { completeGemini } from "./gemini-settings.js";
 import { config } from "./config.js";
 import { HttpError, nid } from "./http.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "./ai-budget.js";
-import { AiUsage, AppConfig, Exam, Question, Subject, Topic, User } from "./models.js";
+import { AiUsage, AppConfig, DailyMockSet, Exam, MockTest, PracticeSession, Question, Subject, Topic, User } from "./models.js";
+import { stemKey } from "./governance.js";
 import { getOpenAiSettings } from "./openai-settings.js";
 
 const AI_TIMEOUT_MS = 55_000;
@@ -127,8 +128,11 @@ export async function generateMcqBundle(input: {
   language: "en" | "ta";
   difficulty: "easy" | "medium" | "hard";
   count: number;
+  /** Stems the student has already seen; the model is asked not to repeat them. */
+  avoidStems?: string[];
 }): Promise<{ questions: GeneratedMcq[]; provider: string }> {
   await assertAiBudgetAvailable("practice generation");
+  if (process.env.AI_FAKE_QUESTIONS === "1" && !config.isProd) return fakeBundle(input);
   const provider = await resolveProvider();
   if (provider === "local") {
     throw new HttpError(503, "Enable ChatGPT or Gemini in AI providers to generate practice questions.", "AI_UNAVAILABLE");
@@ -150,7 +154,14 @@ Subject: ${input.subjectName}
 Topic: ${input.topicName}
 Difficulty: ${input.difficulty}
 Count: ${count}
-
+${
+  input.avoidStems?.length
+    ? `\nThe student has already practised these. Do NOT repeat or lightly reword them; ask about different facts:\n${input.avoidStems
+        .slice(0, 30)
+        .map((stem) => `- ${stem.slice(0, 120)}`)
+        .join("\n")}\n`
+    : ""
+}
 JSON shape:
 {"questions":[{"stem":"...","options":[{"key":"A","text":"..."},{"key":"B","text":"..."},{"key":"C","text":"..."},{"key":"D","text":"..."}],"correctKey":"A","explanation":"...","difficulty":"${input.difficulty}"}]}`;
 
@@ -161,6 +172,24 @@ JSON shape:
     throw new HttpError(502, "AI returned no usable questions. Try again.", "AI_EMPTY");
   }
   return { questions, provider };
+}
+
+/**
+ * Local verification only (AI_FAKE_QUESTIONS=1, never in production): deterministic
+ * questions without calling a provider. It deliberately echoes one already-seen stem
+ * so the duplicate filter can be exercised.
+ */
+async function fakeBundle(input: { topicName: string; count: number; avoidStems?: string[] }) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const count = Math.min(25, Math.max(1, input.count));
+  const questions: GeneratedMcq[] = Array.from({ length: count }, (_, index) => ({
+    stem: index === 0 && input.avoidStems?.length ? input.avoidStems[0] : `Fake ${input.topicName} question ${nid()}`,
+    options: (["A", "B", "C", "D"] as const).map((key) => ({ key, text: `Option ${key}` })),
+    correctKey: "A",
+    explanation: "Fake explanation for local verification.",
+    difficulty: "medium",
+  }));
+  return { questions, provider: "fake" };
 }
 
 async function pickTopicAnchor(input: {
@@ -196,6 +225,187 @@ async function pickTopicAnchor(input: {
   return { topic: topics[Math.floor(Math.random() * topics.length)], subject };
 }
 
+const shuffle = <T,>(items: T[]) => {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+};
+
+type BankQuestion = {
+  id: string;
+  examId: string;
+  subjectId: string;
+  topicId: string;
+  stem: string;
+  options: Array<{ key: string; text: string }>;
+  correctKey: string;
+  explanation: string;
+  difficulty: string;
+  language: string;
+  source: string;
+  ownerStudentId?: string;
+};
+
+/**
+ * What a student may be served: the approved bank plus AI questions generated for
+ * that student (still under review, never shown to anyone else).
+ */
+export function visibleToStudent(studentId: string) {
+  return { $or: [{ status: "published" }, { status: "under_review", ownerStudentId: studentId }] };
+}
+
+/** Every question this student has already been served in practice for the exam. */
+async function seenPracticeIds(studentId: string, examId: string) {
+  const sessions = await PracticeSession.find({ studentId, examId }).sort({ createdAt: -1 }).select("questionIds").lean();
+  return sessions.map((session) => session.questionIds);
+}
+
+async function stemsFor(ids: string[], limit: number) {
+  if (!ids.length) return [];
+  const rows = await Question.find({ id: { $in: ids.slice(0, limit) } }).select("stem").lean();
+  return rows.map((row) => row.stem);
+}
+
+/**
+ * Generate questions owned by one student. Drops anything whose normalised stem
+ * already exists for the exam (or repeats inside the batch).
+ */
+async function generateForStudent(input: {
+  studentId: string;
+  exam: { id: string; name: string; code: string; authority: string; pattern?: { marksPerQuestion?: number | null } | null };
+  subject: { id: string; name: string; nameEn?: string | null; nameTa?: string | null };
+  topic: { id: string; name: string; nameEn?: string | null; nameTa?: string | null };
+  language: "en" | "ta";
+  difficulty: "easy" | "medium" | "hard";
+  count: number;
+  avoidStems: string[];
+  feature: string;
+}) {
+  const label = (item: { name: string; nameEn?: string | null; nameTa?: string | null }) =>
+    input.language === "ta" ? item.nameTa || item.name : item.nameEn || item.name;
+  const { questions: generated, provider } = await generateMcqBundle({
+      examName: input.exam.name,
+      examCode: input.exam.code,
+      authority: input.exam.authority,
+      subjectName: label(input.subject),
+      topicName: label(input.topic),
+      language: input.language,
+      difficulty: input.difficulty,
+      count: input.count,
+      avoidStems: input.avoidStems,
+  });
+  const keyed = generated.map((item) => ({ item, key: stemKey(item.stem) }));
+  const clashes = await Question.find({ examId: input.exam.id, stemKey: { $in: keyed.map((row) => row.key) } })
+    .select("stemKey")
+    .lean();
+  const taken = new Set([...clashes.map((row) => row.stemKey), ...input.avoidStems.map(stemKey)]);
+  const docs: BankQuestion[] = [];
+  for (const { item, key } of keyed) {
+    if (!key || taken.has(key)) continue;
+    taken.add(key);
+    docs.push({
+      id: nid(),
+      examId: input.exam.id,
+      subjectId: input.subject.id,
+      topicId: input.topic.id,
+      stem: item.stem,
+      options: item.options,
+      correctKey: item.correctKey,
+      explanation: item.explanation,
+      difficulty: item.difficulty || input.difficulty,
+      language: input.language,
+      source: "student_ai",
+      ownerStudentId: input.studentId,
+    });
+  }
+  if (docs.length) {
+    await Question.insertMany(
+      docs.map((doc) => ({
+        ...doc,
+        stemKey: stemKey(doc.stem),
+        status: "under_review",
+        rightsStatus: "not_applicable",
+        marks: input.exam.pattern?.marksPerQuestion || 1.5,
+      })),
+    );
+  }
+  const tokens = Math.ceil(JSON.stringify(generated).length / 4);
+  await AiUsage.create({
+    id: nid(),
+    userId: input.studentId,
+    provider,
+    feature: input.feature,
+    tokens,
+    estimatedInr: estimateAiInr(tokens, provider),
+  });
+  return { docs, provider };
+}
+
+const prefetching = new Set<string>();
+
+/** Prepare the student's next practice set in the background so the next start is instant. */
+function prefetchPractice(input: {
+  studentId: string;
+  examId: string;
+  topicId?: string;
+  difficulty?: "easy" | "medium" | "hard";
+  language: "en" | "ta";
+  count: number;
+}) {
+  const key = `${input.studentId}:${input.examId}:${input.topicId || "*"}:${input.language}`;
+  if (prefetching.has(key)) return;
+  prefetching.add(key);
+  void (async () => {
+    try {
+      const seen = (await seenPracticeIds(input.studentId, input.examId)).flat();
+      const ready = await Question.countDocuments({
+        examId: input.examId,
+        ownerStudentId: input.studentId,
+        status: "under_review",
+        language: input.language,
+        id: { $nin: seen },
+        ...(input.topicId ? { topicId: input.topicId } : {}),
+      });
+      // Keep two sets ahead so the next starts never wait on the AI.
+      if (ready >= input.count * 2) return;
+      const exam = await Exam.findOne({ id: input.examId, lifecycle: "published" }).lean();
+      if (!exam) return;
+      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId });
+      await generateForStudent({
+        studentId: input.studentId,
+        exam,
+        subject: anchor.subject,
+        topic: anchor.topic,
+        language: input.language,
+        difficulty: input.difficulty || "medium",
+        // A few extra so duplicates dropped by the stem filter don't leave a short set.
+        count: Math.min(25, input.count * 2 - ready + 2),
+        avoidStems: await stemsFor(seen, 30),
+        feature: "practice_prefetch",
+      });
+    } catch (error) {
+      console.warn(`Practice prefetch failed: ${error instanceof Error ? error.message : "unknown"}`);
+    } finally {
+      prefetching.delete(key);
+    }
+  })();
+}
+
+async function sample(filter: Record<string, unknown>, size: number): Promise<BankQuestion[]> {
+  if (size <= 0) return [];
+  return Question.aggregate<BankQuestion>([{ $match: filter }, { $sample: { size } }]);
+}
+
+/**
+ * Practice set for one student, never repeating a question they were already served:
+ *  1. unseen questions prepared for them earlier (prefetch) or from the approved bank — instant;
+ *  2. otherwise AI generates the shortfall live;
+ *  3. only if AI is unavailable and nothing unseen is left, it falls back to repeats.
+ * After serving, the next set is prefetched in the background.
+ */
 export async function ensurePracticeQuestions(input: {
   studentId: string;
   examId: string;
@@ -203,192 +413,195 @@ export async function ensurePracticeQuestions(input: {
   difficulty?: "easy" | "medium" | "hard";
   language?: "en" | "ta";
   count: number;
-}) {
-  const exam = await Exam.findOne({ id: input.examId, lifecycle: "published" }).lean();
+}): Promise<{ questions: BankQuestion[]; generatedLive: number; repeated: number }> {
+  const [exam, student, seenLists] = await Promise.all([
+    Exam.findOne({ id: input.examId, lifecycle: "published" }).lean(),
+    input.language ? Promise.resolve(null) : User.findOne({ id: input.studentId }).select("language").lean(),
+    seenPracticeIds(input.studentId, input.examId),
+  ]);
   if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
-
-  const student = await User.findOne({ id: input.studentId }).lean();
   const language: "en" | "ta" = input.language || (student?.language === "ta" ? "ta" : "en");
-  const difficulty = input.difficulty || "medium";
   const count = Math.min(20, Math.max(1, input.count));
+  const seen = new Set(seenLists.flat());
 
-  const filter: Record<string, unknown> = {
-    examId: input.examId,
-    status: "published",
-    language,
+  const scope: Record<string, unknown> = { examId: input.examId, ...visibleToStudent(input.studentId) };
+  if (input.topicId) scope.topicId = input.topicId;
+  const exact: Record<string, unknown> = { ...scope, language };
+  if (input.difficulty) exact.difficulty = input.difficulty;
+
+  const picked: BankQuestion[] = [];
+  const take = (batch: BankQuestion[]) => {
+    for (const question of batch) {
+      if (picked.length >= count || seen.has(question.id)) continue;
+      seen.add(question.id);
+      picked.push(question);
+    }
   };
-  if (input.topicId) filter.topicId = input.topicId;
-  if (input.difficulty) filter.difficulty = input.difficulty;
+  // Prepared-for-me first (prefetched AI questions), then the approved bank.
+  take(await sample({ ...exact, ownerStudentId: input.studentId, status: "under_review", id: { $nin: [...seen] } }, count));
+  take(await sample({ ...exact, id: { $nin: [...seen] } }, count - picked.length));
 
-  const fallbackPool = async () => {
-    let pool = await Question.find(filter).lean();
-    if (!pool.length && input.difficulty) {
-      const loose = { ...filter };
-      delete loose.difficulty;
-      pool = await Question.find(loose).lean();
+  let generatedLive = 0;
+  if (picked.length < count) {
+    try {
+      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId });
+      const { docs } = await generateForStudent({
+        studentId: input.studentId,
+        exam,
+        subject: anchor.subject,
+        topic: anchor.topic,
+        language,
+        difficulty: input.difficulty || "medium",
+        count: count - picked.length,
+        avoidStems: await stemsFor(seenLists.flat(), 30),
+        feature: "practice_generate",
+      });
+      generatedLive = docs.length;
+      take(docs);
+    } catch (error) {
+      if (error instanceof HttpError && error.code === "SYLLABUS_EMPTY") throw error;
+      console.warn(`Live practice generation failed: ${error instanceof Error ? error.message : "unknown"}`);
     }
-    if (!pool.length) {
-      const anyLang = { ...filter };
-      delete (anyLang as { language?: string }).language;
-      pool = await Question.find(anyLang).lean();
+  }
+  // AI unavailable: relax difficulty/language but still only unseen questions.
+  if (picked.length < count) take(await sample({ ...scope, id: { $nin: [...seen] } }, count - picked.length));
+
+  // Last resort: repeat the questions seen longest ago rather than return nothing.
+  let repeated = 0;
+  if (picked.length < count) {
+    const oldestFirst = [...seenLists].reverse().flat();
+    const pickedIds = new Set(picked.map((question) => question.id));
+    const candidates = oldestFirst.filter((id, index) => !pickedIds.has(id) && oldestFirst.indexOf(id) === index);
+    const rows = await Question.find({ id: { $in: candidates }, ...exactScopeWithoutIds(scope) }).lean<BankQuestion[]>();
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    for (const id of candidates) {
+      const row = byId.get(id);
+      if (!row || picked.length >= count) continue;
+      picked.push(row);
+      repeated += 1;
     }
-    if (!pool.length) {
-      throw new HttpError(404, "No practice questions available and AI generate failed.", "NOT_FOUND");
-    }
-    return [...pool].sort(() => Math.random() - 0.5).slice(0, count);
-  };
+  }
 
-  const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId });
-  const subjectName = language === "ta" ? anchor.subject.nameTa || anchor.subject.name : anchor.subject.nameEn || anchor.subject.name;
-  const topicName = language === "ta" ? anchor.topic.nameTa || anchor.topic.name : anchor.topic.nameEn || anchor.topic.name;
+  if (!picked.length) {
+    throw new HttpError(404, "No questions could be prepared for this selection. Try another topic or try again shortly.", "NO_QUESTIONS");
+  }
+  prefetchPractice({ studentId: input.studentId, examId: input.examId, topicId: input.topicId, difficulty: input.difficulty, language, count });
+  return { questions: shuffle(picked), generatedLive, repeated };
+}
 
-  try {
-    const { questions: generated, provider } = await generateMcqBundle({
-      examName: exam.name,
-      examCode: exam.code,
-      authority: exam.authority,
-      subjectName,
-      topicName,
-      language,
-      difficulty,
-      count,
-    });
+function exactScopeWithoutIds(scope: Record<string, unknown>) {
+  const copy = { ...scope };
+  delete copy.id;
+  return copy;
+}
 
-    const docs = generated.map((item) => ({
+const DAILY_MOCK_MAX_QUESTIONS = Number(process.env.DAILY_MOCK_MAX_QUESTIONS || 25);
+
+/**
+ * Generate (or reuse) today's mock question set for one student. Called by the
+ * 02:00 IST job; idempotent through the unique (student, mock, day) index.
+ */
+export async function generateDailyMockSet(input: { studentId: string; mockId: string; dayKey: string }) {
+  const existing = await DailyMockSet.findOne({ studentId: input.studentId, mockId: input.mockId, dayKey: input.dayKey });
+  if (existing?.status === "ready" || existing?.status === "generating") return existing;
+  const mock = await MockTest.findOne({ id: input.mockId, status: "published" }).lean();
+  if (!mock) throw new HttpError(404, "Mock test not found", "NOT_FOUND");
+  const set =
+    existing ||
+    (await DailyMockSet.create({
       id: nid(),
-      examId: exam.id,
-      subjectId: anchor.subject.id,
-      topicId: anchor.topic.id,
-      stem: item.stem,
-      options: item.options,
-      correctKey: item.correctKey,
-      explanation: item.explanation,
-      difficulty: item.difficulty || difficulty,
-      language,
-      source: "student_ai" as const,
-      // Stay off the curated published bank until admin/reviewer approves.
-      status: "under_review" as const,
-      rightsStatus: "not_applicable" as const,
-      marks: exam.pattern?.marksPerQuestion || 1.5,
+      studentId: input.studentId,
+      mockId: mock.id,
+      examId: mock.examId,
+      dayKey: input.dayKey,
+      status: "generating",
     }));
-    await Question.insertMany(docs);
-    const tokens = Math.ceil(JSON.stringify(generated).length / 4);
-    await AiUsage.create({
-      id: nid(),
-      userId: input.studentId,
-      provider,
-      feature: "practice_generate",
-      tokens,
-      estimatedInr: estimateAiInr(tokens, provider),
-    });
-    return docs;
+  set.status = "generating";
+  set.error = "";
+  await set.save();
+  try {
+    const [exam, student, subjects, priorSets] = await Promise.all([
+      Exam.findOne({ id: mock.examId, lifecycle: "published" }).lean(),
+      User.findOne({ id: input.studentId }).select("language").lean(),
+      Subject.find({ examId: mock.examId, status: "published" }).sort({ order: 1 }).lean(),
+      DailyMockSet.find({ studentId: input.studentId, examId: mock.examId, status: "ready" }).sort({ createdAt: -1 }).limit(7).lean(),
+    ]);
+    if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
+    if (!subjects.length) throw new HttpError(404, "No published syllabus subjects for this exam.", "SYLLABUS_EMPTY");
+    const language: "en" | "ta" = student?.language === "ta" ? "ta" : "en";
+    const target = Math.min(DAILY_MOCK_MAX_QUESTIONS, Math.max(5, exam.pattern?.totalQuestions || 20));
+    const avoidStems = await stemsFor(priorSets.flatMap((row) => row.questionIds), 30);
+    const perSubject = Math.max(1, Math.ceil(target / subjects.length));
+    const ids: string[] = [];
+    let provider = "";
+    for (const subject of shuffle(subjects)) {
+      if (ids.length >= target) break;
+      const topics = await Topic.find({ examId: mock.examId, subjectId: subject.id, status: "published" }).lean();
+      if (!topics.length) continue;
+      const topic = topics[Math.floor(Math.random() * topics.length)];
+      const result = await generateForStudent({
+        studentId: input.studentId,
+        exam,
+        subject,
+        topic,
+        language,
+        difficulty: "medium",
+        count: Math.min(perSubject, target - ids.length),
+        avoidStems,
+        feature: "daily_mock_generate",
+      });
+      provider = result.provider;
+      ids.push(...result.docs.map((doc) => doc.id));
+    }
+    if (!ids.length) throw new HttpError(502, "AI returned no usable questions.", "AI_EMPTY");
+    set.questionIds = ids;
+    set.status = "ready";
+    set.provider = provider;
+    await set.save();
+    return set;
   } catch (error) {
-    if (error instanceof HttpError && error.code === "SYLLABUS_EMPTY") throw error;
-    console.warn(`Practice AI generate failed: ${error instanceof Error ? error.message : "unknown"}`);
-    return fallbackPool();
+    set.status = "failed";
+    set.error = error instanceof Error ? error.message.slice(0, 300) : "unknown";
+    await set.save();
+    throw error;
   }
 }
 
-export async function ensureMockQuestions(input: {
+/**
+ * Fallback when no daily set was prepared (job missed, new student): use the
+ * admin-configured list, else sample unseen-by-design approved questions.
+ */
+export async function pickMockQuestionIds(input: {
   studentId: string;
   examId: string;
-  existingIds: string[];
+  configuredIds: string[];
   targetCount: number;
-}) {
-  const existing = await Question.find({
-    id: { $in: input.existingIds },
-    examId: input.examId,
-    status: { $in: ["published", "under_review"] },
-  }).lean();
-  if (existing.length >= Math.min(input.targetCount, input.existingIds.length || input.targetCount) && existing.length > 0) {
-    const byId = new Map(existing.map((question) => [question.id, question]));
-    const ordered = input.existingIds.map((id) => byId.get(id)).filter(Boolean);
-    if (ordered.length) return ordered as typeof existing;
+}): Promise<string[]> {
+  if (input.configuredIds.length) {
+    const ready = await Question.find({ id: { $in: input.configuredIds }, status: "published" }).select("id").lean();
+    const readySet = new Set(ready.map((question) => question.id));
+    const ordered = input.configuredIds.filter((id) => readySet.has(id));
+    if (ordered.length) return ordered;
   }
-
-  const target = Math.min(25, Math.max(5, input.targetCount || 10));
-  const exam = await Exam.findOne({ id: input.examId, lifecycle: "published" }).lean();
-  if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
-  const student = await User.findOne({ id: input.studentId }).lean();
-  const language: "en" | "ta" = student?.language === "ta" ? "ta" : "en";
-
-  const subjects = await Subject.find({ examId: input.examId }).sort({ order: 1 }).lean();
-  if (!subjects.length) {
-    throw new HttpError(404, "No syllabus subjects yet. Admin must discover subjects before mock generation.", "SYLLABUS_EMPTY");
+  const target = Math.max(1, input.targetCount);
+  const pool = await Question.find({ examId: input.examId, status: "published" }).select("id subjectId").lean();
+  if (!pool.length) {
+    throw new HttpError(404, "Today's mock questions are not ready yet. Please try again later.", "NO_QUESTIONS");
   }
-
-  const perSubject = Math.max(1, Math.ceil(target / subjects.length));
-  const created: Array<{
-    id: string;
-    examId: string;
-    subjectId: string;
-    topicId: string;
-    stem: string;
-    options: GeneratedMcq["options"];
-    correctKey: string;
-    explanation: string;
-    difficulty: "easy" | "medium" | "hard";
-    language: "en" | "ta";
-    source: "student_ai";
-    status: "under_review";
-    rightsStatus: "not_applicable";
-    marks: number;
-  }> = [];
-  let providerUsed = "local";
-
-  for (const subject of subjects) {
-    if (created.length >= target) break;
-    const topics = await Topic.find({ examId: input.examId, subjectId: subject.id }).sort({ order: 1 }).lean();
-    if (!topics.length) continue;
-    const remaining = target - created.length;
-    const batch = Math.min(perSubject, remaining);
-    const topic = topics[created.length % topics.length];
-    const subjectName = language === "ta" ? subject.nameTa || subject.name : subject.nameEn || subject.name;
-    const topicName = language === "ta" ? topic.nameTa || topic.name : topic.nameEn || topic.name;
-    const { questions: generated, provider } = await generateMcqBundle({
-      examName: exam.name,
-      examCode: exam.code,
-      authority: exam.authority,
-      subjectName,
-      topicName,
-      language,
-      difficulty: "medium",
-      count: batch,
-    });
-    providerUsed = provider;
-    for (const item of generated) {
-      if (created.length >= target) break;
-      created.push({
-        id: nid(),
-        examId: exam.id,
-        subjectId: subject.id,
-        topicId: topic.id,
-        stem: item.stem,
-        options: item.options,
-        correctKey: item.correctKey,
-        explanation: item.explanation,
-        difficulty: item.difficulty || "medium",
-        language,
-        source: "student_ai",
-        status: "under_review",
-        rightsStatus: "not_applicable",
-        marks: exam.pattern?.marksPerQuestion || 1.5,
-      });
+  // Round-robin across subjects so one subject doesn't dominate.
+  const bySubject = new Map<string, string[]>();
+  for (const question of shuffle(pool)) {
+    const list = bySubject.get(question.subjectId) || [];
+    list.push(question.id);
+    bySubject.set(question.subjectId, list);
+  }
+  const buckets = [...bySubject.values()];
+  const chosen: string[] = [];
+  while (chosen.length < target && buckets.some((bucket) => bucket.length)) {
+    for (const bucket of buckets) {
+      const next = bucket.shift();
+      if (next && chosen.length < target) chosen.push(next);
     }
   }
-
-  if (!created.length) {
-    throw new HttpError(404, "Could not generate mock questions. Update syllabus topics first.", "SYLLABUS_EMPTY");
-  }
-  await Question.insertMany(created);
-  const tokens = Math.ceil(JSON.stringify(created).length / 4);
-  await AiUsage.create({
-    id: nid(),
-    userId: input.studentId,
-    provider: providerUsed,
-    feature: "mock_generate",
-    tokens,
-    estimatedInr: estimateAiInr(tokens, providerUsed),
-  });
-  return created;
+  return chosen;
 }

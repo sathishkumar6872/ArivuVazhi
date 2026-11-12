@@ -15,6 +15,7 @@ type Result = {
   correct: number;
   incorrect: number;
   unanswered: number;
+  weakAreas?: Array<{ topicId: string; topic: string; attempted: number; accuracy: number }>;
   questions: Array<{ id: string; stem: string; options: Array<{ key: string; text: string }>; selectedKey: string; correctKey: string; explanation: string; correct: boolean }>;
 };
 
@@ -41,6 +42,16 @@ export default function ResultPage() {
         <Card sx={{ p: 2 }}>Incorrect<Typography sx={{ fontSize: 28, fontWeight: 800 }}>{result.incorrect}</Typography></Card>
         <Card sx={{ p: 2 }}>Unanswered<Typography sx={{ fontSize: 28, fontWeight: 800 }}>{result.unanswered}</Typography></Card>
       </Box>
+      {result.weakAreas?.length ? (
+        <Card sx={{ p: 2, mt: 2 }}>
+          <Typography sx={{ fontWeight: 800, mb: 1 }}>Weak areas to revise</Typography>
+          {result.weakAreas.map((area) => (
+            <Typography key={area.topicId} color="text.secondary">
+              {area.topic}: {area.accuracy}% across {area.attempted} question{area.attempted === 1 ? "" : "s"}
+            </Typography>
+          ))}
+        </Card>
+      ) : null}
       {result.questions.map((question, index) => (
         <Card key={question.id} sx={{ p: 2, mt: 2 }}>
           <Typography fontWeight={800}>{index + 1}. {question.stem}</Typography>

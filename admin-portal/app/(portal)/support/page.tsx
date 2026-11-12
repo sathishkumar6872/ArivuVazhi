@@ -29,7 +29,8 @@ type Feedback = {
 export default function SupportPage() {
   const tickets = useData<Ticket[]>("/admin/support/tickets");
   const feedback = useData<Feedback[]>("/admin/feedback");
-  const [reply, setReply] = useState("");
+  const [replies, setReplies] = useState<Record<string, string>>({});
+  const [replyStatus, setReplyStatus] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
 
   return (
@@ -94,15 +95,29 @@ export default function SupportPage() {
             <Typography key={index} fontSize={13}>{item.authorRole}: {item.body}</Typography>
           ))}
           <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-            <TextField size="small" fullWidth value={reply} onChange={(event) => setReply(event.target.value)} />
+            <TextField size="small" fullWidth value={replies[ticket.id] || ""} onChange={(event) => setReplies((current) => ({ ...current, [ticket.id]: event.target.value }))} inputProps={{ "aria-label": `Reply to ${ticket.subject}` }} />
+            <TextField
+              select
+              size="small"
+              sx={{ minWidth: 140 }}
+              value={replyStatus[ticket.id] || "in_progress"}
+              onChange={(event) => setReplyStatus((current) => ({ ...current, [ticket.id]: event.target.value }))}
+              inputProps={{ "aria-label": "Status after reply" }}
+            >
+              {["open", "in_progress", "resolved"].map((status) => (
+                <MenuItem key={status} value={status}>{status}</MenuItem>
+              ))}
+            </TextField>
             <Button
+              disabled={!replies[ticket.id]?.trim()}
               onClick={async () => {
+                setError("");
                 try {
                   await api(`/admin/support/tickets/${ticket.id}/reply`, {
                     method: "POST",
-                    body: JSON.stringify({ body: reply, status: "resolved" }),
+                    body: JSON.stringify({ body: replies[ticket.id], status: replyStatus[ticket.id] || "in_progress" }),
                   });
-                  setReply("");
+                  setReplies((current) => ({ ...current, [ticket.id]: "" }));
                   tickets.reload();
                 } catch (err) {
                   setError(err instanceof Error ? err.message : "Reply fail");

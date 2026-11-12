@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Alert, Box, Button, Card, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from "@mui/material";
 import { api } from "@/lib/api";
 import { PageSkeleton } from "@/components/PageSkeleton";
 
@@ -25,6 +25,9 @@ export default function AttemptPage() {
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     api<Attempt>(`/mocks/attempts/${params.id}`)
@@ -54,14 +57,35 @@ export default function AttemptPage() {
     setSaved("Saved on server");
   }
 
-  async function submit() {
-    await save(answers);
-    await api(`/mocks/attempts/${params.id}/submit`, {
-      method: "POST",
-      body: JSON.stringify({ idempotencyKey: `submit-${params.id}` }),
-    });
-    router.push(`/mocks/${params.id}/result`);
+  async function submit(auto = false) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      // After the deadline the server rejects saves (answers are already saved per click), so only a manual submit needs it.
+      await save(answers).catch((err) => { if (!auto) throw err; });
+      await api(`/mocks/attempts/${params.id}/submit`, {
+        method: "POST",
+        body: JSON.stringify({ idempotencyKey: `submit-${params.id}` }),
+      });
+      router.push(`/mocks/${params.id}/result`);
+    } catch (err) {
+      submittingRef.current = false;
+      setSubmitting(false);
+      throw err;
+    }
   }
+
+  const deadline = attempt ? new Date(attempt.deadlineAt).getTime() : 0;
+  const timeUp = Boolean(attempt?.questions) && now >= deadline;
+  const autoSubmittedRef = useRef(false);
+  useEffect(() => {
+    if (!timeUp || autoSubmittedRef.current) return;
+    autoSubmittedRef.current = true;
+    setConfirmOpen(false);
+    submit(true).catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeUp]);
 
   if (!attempt?.questions) {
     return (
@@ -72,7 +96,10 @@ export default function AttemptPage() {
   }
 
   const question = attempt.questions[index];
-  const remaining = Math.max(0, new Date(attempt.deadlineAt).getTime() - now);
+  const remaining = Math.max(0, deadline - now);
+  const answeredCount = attempt.questions.filter((item) => answers[item.id]?.selectedKey).length;
+  const unansweredCount = attempt.questions.length - answeredCount;
+  const reviewCount = attempt.questions.filter((item) => answers[item.id]?.markedForReview).length;
   const minutes = Math.floor(remaining / 60000);
   const seconds = Math.floor((remaining % 60000) / 1000);
 
@@ -83,7 +110,7 @@ export default function AttemptPage() {
         <Typography color={remaining < 60000 ? "error" : "primary"} fontWeight={800}>{String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}</Typography>
       </Box>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {remaining === 0 && <Alert severity="warning" sx={{ mb: 2 }}>Time is up. Submit to score the answers already saved.</Alert>}
+      {remaining === 0 && <Alert severity="warning" sx={{ mb: 2 }}>Time is up. Submitting the answers already saved...</Alert>}
       <Card sx={{ p: 3 }}>
         <Typography color="text.secondary">Question {index + 1} of {attempt.questions.length}</Typography>
         <Typography sx={{ fontSize: 20, fontWeight: 700, my: 2 }}>{question.stem}</Typography>
@@ -102,10 +129,23 @@ export default function AttemptPage() {
           }}>Mark for review</Button>
           <Button disabled={index === 0} onClick={() => setIndex(index - 1)}>Previous</Button>
           <Button disabled={index === attempt.questions.length - 1} onClick={() => setIndex(index + 1)}>Next</Button>
-          <Button variant="contained" onClick={() => submit().catch((err) => setError(err.message))}>Submit</Button>
+          <Button variant="contained" disabled={submitting} onClick={() => setConfirmOpen(true)}>{submitting ? "Submitting..." : "Submit"}</Button>
           <Typography color="text.secondary">{saved}</Typography>
         </Box>
       </Card>
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Submit mock test?</DialogTitle>
+        <DialogContent>
+          <Typography>Answered: {answeredCount}</Typography>
+          <Typography>Unanswered: {unansweredCount}</Typography>
+          <Typography>Marked for review: {reviewCount}</Typography>
+          <Typography color="text.secondary" sx={{ mt: 1 }}>You cannot change answers after submitting.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Keep working</Button>
+          <Button variant="contained" disabled={submitting} onClick={() => { setConfirmOpen(false); submit().catch((err) => setError(err.message)); }}>Submit</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

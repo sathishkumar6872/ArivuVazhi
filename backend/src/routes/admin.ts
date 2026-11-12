@@ -32,6 +32,8 @@ import {
 import { getGeminiSettings, testGeminiConnection } from "../gemini-settings.js";
 import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
+import { dailyMockJobStatus, runDailyMockJob } from "../jobs.js";
+import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireRole("admin", "reviewer"));
@@ -54,7 +56,7 @@ adminRouter.get(
       User.countDocuments({ role: "student" }),
       Question.countDocuments({ status: "published" }),
       Question.countDocuments({ status: "under_review" }),
-      Topic.countDocuments({ status: { $in: ["draft", "validation", "approved"] } }),
+      Topic.countDocuments({ status: "validation" }),
       Ticket.countDocuments({ status: { $in: ["open", "in_progress"] } }),
       AiUsage.aggregate([{ $group: { _id: null, tokens: { $sum: "$tokens" }, inr: { $sum: "$estimatedInr" }, requests: { $sum: 1 } } }]),
     ]);
@@ -76,9 +78,15 @@ adminRouter.get(
   "/students",
   wrap(async (req, res) => {
     const { page, limit, skip } = pageQuery(req.query);
-    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
     const filter: Record<string, unknown> = { role: "student" };
-    if (q) filter.$or = [{ email: new RegExp(q, "i") }, { firstName: new RegExp(q, "i") }, { lastName: new RegExp(q, "i") }];
+    if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      filter.$or = [{ email: pattern }, { firstName: pattern }, { lastName: pattern }];
+    }
+    if (typeof req.query.status === "string" && ["active", "inactive", "suspended"].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
     const [items, total] = await Promise.all([
       User.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       User.countDocuments(filter),
@@ -160,14 +168,42 @@ adminRouter.patch(
         name: z.string().min(2).optional(),
         authority: z.string().min(2).optional(),
         description: z.string().optional(),
-        lifecycle: z.enum(["draft", "under_review", "published", "revised", "archived"]).optional(),
+        lifecycle: z.enum(EXAM_LIFECYCLES).optional(),
         version: z.string().optional(),
-        pattern: z.record(z.any()).optional(),
+        pattern: z
+          .object({
+            durationMinutes: z.number().positive(),
+            totalQuestions: z.number().int().positive(),
+            marksPerQuestion: z.number().nonnegative(),
+            negativeMarks: z.number().nonnegative(),
+            sections: z.array(z.object({ name: z.string().min(1), questionCount: z.number().int().nonnegative() })).optional(),
+          })
+          .partial()
+          .optional(),
       })
       .parse(req.body);
-    const exam = await Exam.findOneAndUpdate({ id: req.params.id }, body, { new: true }).lean();
+    const current = await Exam.findOne({ id: req.params.id }).lean();
+    if (!current) throw new HttpError(404, "Exam not found", "NOT_FOUND");
+    if (body.lifecycle && !canTransitionExam(current.lifecycle, body.lifecycle)) {
+      const next = allowedExamTransitions(current.lifecycle);
+      throw new HttpError(
+        400,
+        `Cannot move an exam from ${current.lifecycle} to ${body.lifecycle}. Allowed: ${next.join(", ") || "none"}.`,
+        "INVALID_TRANSITION",
+      );
+    }
+    const update: Record<string, unknown> = { ...body };
+    delete update.pattern;
+    if (body.pattern) {
+      for (const [key, value] of Object.entries(body.pattern)) update[`pattern.${key}`] = value;
+    }
+    const exam = await Exam.findOneAndUpdate({ id: req.params.id }, { $set: update }, { new: true }).lean();
     if (!exam) throw new HttpError(404, "Exam not found", "NOT_FOUND");
-    await audit(req.user!.id, "exam_update", "exam", exam.id, { lifecycle: body.lifecycle });
+    await audit(req.user!.id, "exam_update", "exam", exam.id, {
+      lifecycle: body.lifecycle,
+      fromLifecycle: current.lifecycle,
+      pattern: body.pattern,
+    });
     res.json({ data: exam });
   }),
 );
@@ -217,22 +253,32 @@ adminRouter.post(
       throw new HttpError(400, error instanceof Error ? error.message : "Subject AI fetch failed", "SYLLABUS_AI_FAILED");
     }
 
-    // Replace subjects only; clear old topics until each subject is updated.
-    await Topic.deleteMany({ examId: body.examId });
-    await Subject.deleteMany({ examId: body.examId });
-    const createdSubjects = [];
-    for (const [subjectIndex, subject] of fetched.subjects.entries()) {
-      const subjectDoc = await Subject.create({
-        id: nid(),
-        examId: body.examId,
-        name: subject.en,
-        nameEn: subject.en,
-        nameTa: subject.ta,
-        order: subjectIndex + 1,
-        status: "published",
-      });
-      createdSubjects.push(subjectDoc);
-    }
+    // Non-destructive merge: matching subjects keep their IDs (and their topics,
+    // questions and student progress); new ones wait in validation for approval;
+    // ones no longer listed are withdrawn (hidden), never deleted.
+    const existingSubjects = await Subject.find({ examId: body.examId }).lean();
+    const plan = planSyllabusMerge(existingSubjects, fetched.subjects);
+    await Promise.all([
+      ...plan.keep.map((item) =>
+        Subject.updateOne({ id: item.row.id }, { $set: { order: item.order, nameEn: item.en, nameTa: item.ta || item.row.nameTa } }),
+      ),
+      plan.withdraw.length
+        ? Subject.updateMany({ id: { $in: plan.withdraw.map((row) => row.id) } }, { $set: { status: "draft" } })
+        : Promise.resolve(),
+    ]);
+    const createdSubjects = plan.create.length
+      ? await Subject.insertMany(
+          plan.create.map((item) => ({
+            id: nid(),
+            examId: body.examId,
+            name: item.en,
+            nameEn: item.en,
+            nameTa: item.ta,
+            order: item.order,
+            status: "validation",
+          })),
+        )
+      : [];
 
     const snapshot = await SyllabusSnapshot.create({
       id: nid(),
@@ -258,13 +304,19 @@ adminRouter.post(
       year,
       snapshotId: snapshot.id,
       provider: fetched.provider,
-      subjectCount: createdSubjects.length,
+      kept: plan.keep.length,
+      proposed: createdSubjects.length,
+      withdrawn: plan.withdraw.length,
     });
     res.status(201).json({
       data: {
         ...snapshot.toObject(),
         provider: fetched.provider,
-        subjectCount: createdSubjects.length,
+        subjectCount: plan.keep.length + createdSubjects.length,
+        kept: plan.keep.length,
+        proposed: createdSubjects.length,
+        withdrawn: plan.withdraw.length,
+        note: "New subjects wait in Content Approval before students see them.",
         topicCount: 0,
         step: "subjects",
       },
@@ -297,22 +349,30 @@ adminRouter.post(
       throw new HttpError(400, error instanceof Error ? error.message : "Topic AI fetch failed", "SYLLABUS_TOPIC_AI_FAILED");
     }
 
-    await Topic.deleteMany({ examId: subject.examId, subjectId: subject.id });
-    const created = [];
-    for (const [topicIndex, topic] of fetched.topics.entries()) {
-      created.push(
-        await Topic.create({
-          id: nid(),
-          examId: subject.examId,
-          subjectId: subject.id,
-          name: topic.en,
-          nameEn: topic.en,
-          nameTa: topic.ta,
-          order: topicIndex + 1,
-          status: "published",
-        }),
-      );
-    }
+    const existingTopics = await Topic.find({ examId: subject.examId, subjectId: subject.id }).lean();
+    const topicPlan = planSyllabusMerge(existingTopics, fetched.topics);
+    await Promise.all([
+      ...topicPlan.keep.map((item) =>
+        Topic.updateOne({ id: item.row.id }, { $set: { order: item.order, nameEn: item.en, nameTa: item.ta || item.row.nameTa } }),
+      ),
+      topicPlan.withdraw.length
+        ? Topic.updateMany({ id: { $in: topicPlan.withdraw.map((row) => row.id) } }, { $set: { status: "draft" } })
+        : Promise.resolve(),
+    ]);
+    const created = topicPlan.create.length
+      ? await Topic.insertMany(
+          topicPlan.create.map((item) => ({
+            id: nid(),
+            examId: subject.examId,
+            subjectId: subject.id,
+            name: item.en,
+            nameEn: item.en,
+            nameTa: item.ta,
+            order: item.order,
+            status: "validation",
+          })),
+        )
+      : [];
 
     // Refresh active snapshot row for this subject if present.
     const active = await SyllabusSnapshot.findOne({ examId: subject.examId, status: "active" });
@@ -351,13 +411,18 @@ adminRouter.post(
 
     await audit(req.user!.id, "syllabus_subject_topics_refresh", "subject", subject.id, {
       provider: fetched.provider,
-      topicCount: created.length,
+      kept: topicPlan.keep.length,
+      proposed: created.length,
+      withdrawn: topicPlan.withdraw.length,
     });
     res.status(201).json({
       data: {
         subjectId: subject.id,
         provider: fetched.provider,
-        topicCount: created.length,
+        topicCount: topicPlan.keep.length + created.length,
+        kept: topicPlan.keep.length,
+        proposed: created.length,
+        withdrawn: topicPlan.withdraw.length,
         topics: created,
         step: "topics",
       },
@@ -593,11 +658,12 @@ adminRouter.post(
       id: nid(),
       status: "draft",
       instructions: body.instructions || [
-        "Questions generate automatically when a student starts this mock.",
+        "Questions are drawn from the approved question bank when you start.",
         "One attempt per mock per day.",
       ],
       ...body,
     });
+    await audit(req.user!.id, "mock_create", "mock", mock.id, { examId: body.examId });
     res.status(201).json({ data: mock });
   }),
 );
@@ -616,16 +682,18 @@ adminRouter.patch(
 adminRouter.get(
   "/approvals",
   wrap(async (_req, res) => {
-    const [questions, topics, sources, papers] = await Promise.all([
-      Question.find({ status: "under_review" }).limit(30).lean(),
-      Topic.find({ status: { $in: ["draft", "validation"] } }).limit(30).lean(),
+    const [questions, subjects, topics, sources, papers] = await Promise.all([
+      Question.find({ status: "under_review" }).sort({ createdAt: 1 }).limit(30).lean(),
+      Subject.find({ status: "validation" }).limit(30).lean(),
+      Topic.find({ status: "validation" }).limit(30).lean(),
       KnowledgeSource.find({ status: { $in: ["draft", "under_review"] } }).limit(30).lean(),
       PyqPaper.find({ status: "under_review" }).limit(30).lean(),
     ]);
     res.json({
       data: [
         ...questions.map((item) => ({ type: "question", id: item.id, title: item.stem.slice(0, 120), status: item.status })),
-        ...topics.map((item) => ({ type: "topic", id: item.id, title: item.name, status: item.status })),
+        ...subjects.map((item) => ({ type: "subject", id: item.id, title: item.nameEn || item.name, status: item.status })),
+        ...topics.map((item) => ({ type: "topic", id: item.id, title: item.nameEn || item.name, status: item.status })),
         ...sources.map((item) => ({ type: "source", id: item.id, title: item.title, status: item.status })),
         ...papers.map((item) => ({ type: "pyq", id: item.id, title: item.title, status: item.status, rightsStatus: item.rightsStatus })),
       ],
@@ -642,10 +710,18 @@ adminRouter.post(
       const status = decision === "approve" ? "published" : "rejected";
       const item = await Question.findOneAndUpdate({ id }, { status }, { new: true }).lean();
       if (!item) throw new HttpError(404, "Question not found", "NOT_FOUND");
+    } else if (type === "subject") {
+      const status = decision === "approve" ? "published" : "draft";
+      const item = await Subject.findOneAndUpdate({ id }, { status }, { new: true }).lean();
+      if (!item) throw new HttpError(404, "Subject not found", "NOT_FOUND");
     } else if (type === "topic") {
       const status = decision === "approve" ? "published" : "draft";
       const item = await Topic.findOneAndUpdate({ id }, { status }, { new: true }).lean();
       if (!item) throw new HttpError(404, "Topic not found", "NOT_FOUND");
+      // A topic can't be visible under a hidden subject.
+      if (decision === "approve") {
+        await Subject.updateOne({ id: item.subjectId, status: "validation" }, { $set: { status: "published" } });
+      }
     } else if (type === "source") {
       const status = decision === "approve" ? "approved" : "retired";
       const rightsStatus = decision === "approve" ? "verified" : "rejected";
@@ -695,6 +771,7 @@ adminRouter.post(
       sourceType: body.sourceType || "notes",
       ...body,
     });
+    await audit(req.user!.id, "knowledge_create", "knowledge", source.id, { examId: body.examId });
     res.status(201).json({ data: source });
   }),
 );
@@ -1033,8 +1110,18 @@ adminRouter.get(
         budgetInr: settings?.monthlyBudgetInr || 0,
         database: "MongoDB Atlas",
         hostingNote: "Free-tier limits must be validated before a public launch.",
+        dailyMockJob: await dailyMockJobStatus(),
       },
     });
+  }),
+);
+
+adminRouter.post(
+  "/jobs/daily-mocks",
+  wrap(async (req, res) => {
+    void runDailyMockJob("manual").catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
+    await audit(req.user!.id, "job_trigger", "job", "daily_mock_sets");
+    res.status(202).json({ data: { started: true } });
   }),
 );
 

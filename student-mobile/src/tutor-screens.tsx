@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, TextInput, View, type ScrollViewInstance } from "react-native";
 import { api, type Student } from "./api";
 import { useKeyboardLift } from "./keyboard";
 import type { Route } from "./nav";
@@ -102,7 +102,7 @@ export function TutorScreen({ user, go }: { user: Student; go: (route: Route) =>
 
 export function ChatScreen({ user, conversationId, starter, back }: { user: Student; conversationId?: string; starter?: string; back: () => void }) {
   const { palette } = useTheme();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const keyboardLift = useKeyboardLift();
   const [messages, setMessages] = useState<Array<{ role: string; content: string; sources?: string[] }>>([]);
   const [thread, setThread] = useState(conversationId || "");

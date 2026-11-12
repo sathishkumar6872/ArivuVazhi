@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Button, Menu, MenuItem, Typography } from "@mui/material";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
 import MenuBookRoundedIcon from "@mui/icons-material/MenuBookRounded";
 import EditNoteRoundedIcon from "@mui/icons-material/EditNoteRounded";
@@ -15,6 +15,7 @@ import HistoryEduRoundedIcon from "@mui/icons-material/HistoryEduRounded";
 import SupportAgentRoundedIcon from "@mui/icons-material/SupportAgentRounded";
 import NotificationsNoneRoundedIcon from "@mui/icons-material/NotificationsNoneRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 
@@ -31,13 +32,20 @@ const links = [
   { href: "/support", label: "Support", icon: <SupportAgentRoundedIcon fontSize="small" /> },
 ];
 
-const mobile = ["/dashboard", "/practice", "/mocks", "/planner", "/profile"];
+const mobile: Array<{ href: string; short: string }> = [
+  { href: "/dashboard", short: "Dashboard" },
+  { href: "/practice", short: "Practice" },
+  { href: "/mocks", short: "Mocks" },
+  { href: "/tutor", short: "Tutor" },
+];
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
   const [query, setQuery] = useState("");
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  const moreLinks = links.filter((link) => !mobile.some((item) => item.href === link.href));
   const current = links.find((link) => pathname.startsWith(link.href))?.label || "ArivuVazhi";
 
   function search(event: React.FormEvent) {
@@ -70,10 +78,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <Box component="form" onSubmit={search} sx={{ height: 72, bgcolor: "rgba(244,246,251,.9)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "space-between", px: 3, position: "sticky", top: 0, zIndex: 5, gap: 2 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, bgcolor: "white", border: "1px solid #EEF1F6", borderRadius: 99, px: 1.5, height: 42, flex: 1, maxWidth: 420 }}>
             <SearchRoundedIcon sx={{ color: "#98A2B3", fontSize: 20 }} />
-            <Box component="input" value={query} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} placeholder={`Search ${current.toLowerCase()}...`} sx={{ border: 0, outline: 0, width: "100%", font: "inherit", bgcolor: "transparent" }} />
+            <Box component="input" aria-label="Search" value={query} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.target.value)} placeholder={`Search ${current.toLowerCase()}...`} sx={{ border: 0, outline: 0, width: "100%", font: "inherit", bgcolor: "transparent" }} />
           </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-            <Button component={Link} href="/notifications" sx={{ minWidth: 42, width: 42, height: 42, borderRadius: "50%", bgcolor: "white", border: "1px solid #EEF1F6" }}>
+            <Button component={Link} href="/notifications" aria-label="Notifications" sx={{ minWidth: 42, width: 42, height: 42, borderRadius: "50%", bgcolor: "white", border: "1px solid #EEF1F6" }}>
               <NotificationsNoneRoundedIcon sx={{ color: "#344054" }} />
             </Button>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, bgcolor: "white", border: "1px solid #EEF1F6", borderRadius: 99, pl: 0.6, pr: 1.4, py: 0.4 }}>
@@ -86,10 +94,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <Box sx={{ maxWidth: 1180, mx: "auto", p: { xs: 2, md: 3 }, pb: { xs: 12, md: 5 } }}>{children}</Box>
       </Box>
       <Box sx={{ display: { xs: "flex", md: "none" }, position: "fixed", bottom: 0, left: 0, right: 0, bgcolor: "white", borderTop: "1px solid #EEF1F6", justifyContent: "space-around", py: 1, zIndex: 10 }}>
-        {links.filter((link) => mobile.includes(link.href)).map((link) => (
-          <Button key={link.href} component={Link} href={link.href} sx={{ minWidth: 0, fontSize: 10, color: pathname.startsWith(link.href) ? "#5B4DFF" : "#98A2B3" }}>{link.label.split(" ")[0]}</Button>
+        {mobile.map((item) => (
+          <Button key={item.href} component={Link} href={item.href} aria-label={links.find((link) => link.href === item.href)?.label} sx={{ minWidth: 0, fontSize: 10, color: pathname.startsWith(item.href) ? "#5B4DFF" : "#98A2B3" }}>{item.short}</Button>
         ))}
+        <Button aria-label="More pages" aria-haspopup="menu" aria-expanded={Boolean(moreAnchor)} onClick={(event) => setMoreAnchor(event.currentTarget)} startIcon={<MoreHorizRoundedIcon fontSize="small" />} sx={{ minWidth: 0, fontSize: 10, color: moreLinks.some((link) => pathname.startsWith(link.href)) ? "#5B4DFF" : "#98A2B3" }}>More</Button>
       </Box>
+      <Menu anchorEl={moreAnchor} open={Boolean(moreAnchor)} onClose={() => setMoreAnchor(null)} anchorOrigin={{ vertical: "top", horizontal: "right" }} transformOrigin={{ vertical: "bottom", horizontal: "right" }}>
+        {[...moreLinks, { href: "/notifications", label: "Notifications", icon: <NotificationsNoneRoundedIcon fontSize="small" /> }].map((link) => (
+          <MenuItem key={link.href} component={Link} href={link.href} selected={pathname.startsWith(link.href)} onClick={() => setMoreAnchor(null)} sx={{ gap: 1.2 }}>
+            {link.icon}{link.label}
+          </MenuItem>
+        ))}
+      </Menu>
     </Box>
   );
 }

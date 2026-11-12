@@ -13,6 +13,14 @@ import { authRouter } from "./routes/auth.js";
 import { studentRouter } from "./routes/student.js";
 import { learningRouter } from "./routes/learning.js";
 import { adminRouter } from "./routes/admin.js";
+import { runDailyMockJob } from "./jobs.js";
+import crypto from "node:crypto";
+
+function safeEqual(left: string, right: string) {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 export function createApp() {
   const app = express();
@@ -54,6 +62,16 @@ export function createApp() {
   app.get("/api/v1/health", (_req, res) => {
     const db = mongoose.connection.readyState === 1 ? "up" : "down";
     res.status(db === "up" ? 200 : 503).json({ data: { status: db === "up" ? "ok" : "degraded", db, service: "arivuvazhi-api" } });
+  });
+  // External cron trigger for hosts that sleep at 02:00 (e.g. free tiers). Disabled unless CRON_SECRET is set.
+  app.post("/api/v1/internal/jobs/daily-mocks", (req, res, next) => {
+    const secret = config.cronSecret;
+    const given = req.headers["x-cron-secret"];
+    if (!secret || typeof given !== "string" || !safeEqual(given, secret)) {
+      return next(new HttpError(404, "Route not found", "NOT_FOUND"));
+    }
+    void runDailyMockJob("manual").catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
+    res.status(202).json({ data: { started: true } });
   });
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1", studentRouter);

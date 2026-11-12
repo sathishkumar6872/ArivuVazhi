@@ -64,6 +64,8 @@ export const config = {
   adminPassword,
   studentEmail,
   studentPassword,
+  /** Shared secret for POST /api/v1/internal/jobs/daily-mocks (external cron). Empty disables the route. */
+  cronSecret: process.env.CRON_SECRET || "",
   allowDemoSeed: process.env.ALLOW_DEMO_SEED === "true",
   demoAdminPassword: DEMO_ADMIN_PASSWORD,
   demoStudentPassword: DEMO_STUDENT_PASSWORD,

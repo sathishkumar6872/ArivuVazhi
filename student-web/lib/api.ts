@@ -19,7 +19,17 @@ export type User = {
   streak: number;
 };
 
-async function refresh(): Promise<boolean> {
+let refreshInFlight: Promise<boolean> | null = null;
+
+// Single-flight: concurrent 401s share one refresh so the rotating token is only used once.
+function refresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().catch(() => false).finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
   const refreshToken = localStorage.getItem("av_refresh");
   if (!refreshToken) return false;
   const response = await fetch(`${API_URL}/auth/refresh`, {

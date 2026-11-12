@@ -2,10 +2,12 @@ import { Router } from "express";
 import { z } from "zod";
 import { audit, publicUser, requireAuth } from "../auth.js";
 import { dayKey, HttpError, nid, sendList, pageQuery, wrap } from "../http.js";
+import { visibleToStudent } from "../question-ai.js";
 import {
   AppFeedback,
   Bookmark,
   Exam,
+  MockAttempt,
   Note,
   Notification,
   PlannerTask,
@@ -129,15 +131,19 @@ studentRouter.get(
   wrap(async (req, res) => {
     const exam = await Exam.findOne({ id: req.params.id, lifecycle: "published" }).lean();
     if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
-    const me = await User.findOne({ id: owner(req) }).lean();
-    const language = (me?.language === "ta" ? "ta" : "en") as "en" | "ta";
-    const subjects = await Subject.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean();
-    const topics = await Topic.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean();
-    const sessions = await PracticeSession.find({ studentId: owner(req), examId: exam.id, status: "completed" }).lean();
+    const language = (req.user!.language === "ta" ? "ta" : "en") as "en" | "ta";
+    const [subjects, topics, sessions] = await Promise.all([
+      Subject.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean(),
+      Topic.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean(),
+      PracticeSession.find({ studentId: owner(req), examId: exam.id, status: "completed" }).select("answers").lean(),
+    ]);
+    const answeredIds = [...new Set(sessions.flatMap((session) => session.answers.map((answer) => answer.questionId)))];
+    const questions = answeredIds.length
+      ? await Question.find({ id: { $in: answeredIds } }).select("id topicId").lean()
+      : [];
+    const topicByQuestion = new Map(questions.map((question) => [question.id, question.topicId]));
     const topicStats = new Map<string, { correct: number; total: number }>();
     for (const session of sessions) {
-      const questions = await Question.find({ id: { $in: session.questionIds } }).select("id topicId").lean();
-      const topicByQuestion = new Map(questions.map((question) => [question.id, question.topicId]));
       for (const answer of session.answers) {
         const topicId = topicByQuestion.get(answer.questionId);
         if (!topicId) continue;
@@ -247,18 +253,44 @@ studentRouter.patch(
   }),
 );
 
+studentRouter.delete(
+  "/planner/:id",
+  wrap(async (req, res) => {
+    const result = await PlannerTask.deleteOne({ id: req.params.id, studentId: owner(req) });
+    if (!result.deletedCount) throw new HttpError(404, "Task not found", "NOT_FOUND");
+    res.json({ data: { removed: true } });
+  }),
+);
+
 studentRouter.get(
   "/analytics",
   wrap(async (req, res) => {
-    const sessions = await PracticeSession.find({ studentId: owner(req), status: "completed" }).lean();
+    const examId = req.user!.primaryExamId;
+    const [sessions, topicCount, attempts] = await Promise.all([
+      PracticeSession.find({ studentId: owner(req), status: "completed" }).select("examId answers completedAt").lean(),
+      examId ? Topic.countDocuments({ examId, status: "published" }) : Promise.resolve(0),
+      MockAttempt.find({ studentId: owner(req), status: "submitted" })
+        .sort({ submittedAt: 1 })
+        .select("mockId rawScore maxScore submittedAt")
+        .limit(30)
+        .lean(),
+    ]);
+    const answeredIds = [...new Set(sessions.flatMap((session) => session.answers.map((answer) => answer.questionId)))];
+    const questions = answeredIds.length
+      ? await Question.find({ id: { $in: answeredIds } }).select("id subjectId topicId").lean()
+      : [];
+    const questionMap = new Map(questions.map((question) => [question.id, question]));
+    const subjects = await Subject.find({ id: { $in: [...new Set(questions.map((question) => question.subjectId))] } })
+      .select("id name nameEn")
+      .lean();
+    const subjectName = new Map(subjects.map((subject) => [subject.id, subject.nameEn || subject.name]));
     let correct = 0;
     let total = 0;
     const bySubject = new Map<string, { name: string; correct: number; total: number }>();
+    const activeDays = new Set<string>();
+    const since = Date.now() - 28 * 24 * 60 * 60 * 1000;
     for (const session of sessions) {
-      const questions = await Question.find({ id: { $in: session.questionIds } }).lean();
-      const subjects = await Subject.find({ id: { $in: questions.map((question) => question.subjectId) } }).lean();
-      const subjectName = new Map(subjects.map((subject) => [subject.id, subject.name]));
-      const questionMap = new Map(questions.map((question) => [question.id, question]));
+      if (session.completedAt && new Date(session.completedAt).getTime() >= since) activeDays.add(dayKey(new Date(session.completedAt)));
       for (const answer of session.answers) {
         total += 1;
         if (answer.correct) correct += 1;
@@ -271,14 +303,13 @@ studentRouter.get(
         bySubject.set(question.subjectId, bucket);
       }
     }
-    const examId = req.user!.primaryExamId;
-    const topicCount = examId ? await Topic.countDocuments({ examId, status: "published" }) : 0;
     const studiedTopics = new Set<string>();
     if (examId) {
-      const examSessions = sessions.filter((session) => session.examId === examId);
-      for (const session of examSessions) {
-        const questions = await Question.find({ id: { $in: session.answers.filter((answer) => answer.correct).map((answer) => answer.questionId) } }).lean();
-        questions.forEach((question) => studiedTopics.add(question.topicId));
+      for (const session of sessions.filter((item) => item.examId === examId)) {
+        for (const answer of session.answers) {
+          const topicId = answer.correct ? questionMap.get(answer.questionId)?.topicId : undefined;
+          if (topicId) studiedTopics.add(topicId);
+        }
       }
     }
     const accuracy = total ? Math.round((correct / total) * 100) : 0;
@@ -294,6 +325,14 @@ studentRouter.get(
         topicCount,
         readiness,
         caveat: "Readiness is an estimate from your practice. It is not a guarantee of passing.",
+        consistency: { activeDaysLast28: activeDays.size },
+        mockTrend: attempts.map((attempt) => ({
+          mockId: attempt.mockId,
+          submittedAt: attempt.submittedAt,
+          rawScore: attempt.rawScore,
+          maxScore: attempt.maxScore,
+          percent: attempt.maxScore ? Math.round(((attempt.rawScore || 0) / attempt.maxScore) * 100) : 0,
+        })),
         subjects: [...bySubject.values()].map((subject) => ({
           name: subject.name,
           accuracy: subject.total ? Math.round((subject.correct / subject.total) * 100) : 0,
@@ -308,7 +347,7 @@ studentRouter.get(
   "/bookmarks",
   wrap(async (req, res) => {
     const bookmarks = await Bookmark.find({ studentId: owner(req) }).sort({ createdAt: -1 }).lean();
-    const questions = await Question.find({ id: { $in: bookmarks.map((item) => item.questionId) }, status: "published" })
+    const questions = await Question.find({ id: { $in: bookmarks.map((item) => item.questionId) }, ...visibleToStudent(owner(req)) })
       .select("-correctKey")
       .lean();
     res.json({ data: questions });
@@ -319,7 +358,7 @@ studentRouter.post(
   "/bookmarks",
   wrap(async (req, res) => {
     const questionId = z.object({ questionId: z.string() }).parse(req.body).questionId;
-    const question = await Question.findOne({ id: questionId, status: "published" }).lean();
+    const question = await Question.findOne({ id: questionId, ...visibleToStudent(owner(req)) }).lean();
     if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
     const existing = await Bookmark.findOne({ studentId: owner(req), questionId }).lean();
     if (existing) return res.json({ data: existing });
@@ -350,6 +389,16 @@ studentRouter.post(
     const body = z.object({ body: z.string().trim().min(1).max(4000), topicId: z.string().optional() }).parse(req.body);
     const note = await Note.create({ id: nid(), studentId: owner(req), topicId: body.topicId || "", body: body.body });
     res.status(201).json({ data: note });
+  }),
+);
+
+studentRouter.patch(
+  "/notes/:id",
+  wrap(async (req, res) => {
+    const body = z.object({ body: z.string().trim().min(1).max(4000) }).parse(req.body);
+    const note = await Note.findOneAndUpdate({ id: req.params.id, studentId: owner(req) }, { body: body.body }, { new: true }).lean();
+    if (!note) throw new HttpError(404, "Note not found", "NOT_FOUND");
+    res.json({ data: note });
   }),
 );
 
@@ -467,26 +516,26 @@ studentRouter.get(
   "/dashboard",
   wrap(async (req, res) => {
     const user = req.user!;
-    const exam = user.primaryExamId ? await Exam.findOne({ id: user.primaryExamId }).lean() : null;
     const today = dayKey();
     if (user.preferences?.carryForward) {
       await PlannerTask.updateMany({ studentId: user.id, status: "pending", dueDate: { $lt: today } }, { dueDate: today });
     }
-    const tasks = await PlannerTask.find({ studentId: user.id, dueDate: today }).lean();
-    const sessions = await PracticeSession.find({ studentId: user.id, status: "completed" }).lean();
-    let correct = 0;
-    let total = 0;
-    sessions.forEach((session) => {
-      session.answers.forEach((answer) => {
-        total += 1;
-        if (answer.correct) correct += 1;
-      });
-    });
-    const unread = await Notification.countDocuments({
-      status: "delivered",
-      readBy: { $ne: user.id },
-      $or: [{ userId: "" }, { userId: user.id }],
-    });
+    const [exam, tasks, totals, unread] = await Promise.all([
+      user.primaryExamId ? Exam.findOne({ id: user.primaryExamId }).select("id name authority").lean() : Promise.resolve(null),
+      PlannerTask.find({ studentId: user.id, dueDate: today }).lean(),
+      PracticeSession.aggregate<{ total: number; correct: number }>([
+        { $match: { studentId: user.id, status: "completed" } },
+        { $unwind: "$answers" },
+        { $group: { _id: null, total: { $sum: 1 }, correct: { $sum: { $cond: ["$answers.correct", 1, 0] } } } },
+      ]),
+      Notification.countDocuments({
+        status: "delivered",
+        readBy: { $ne: user.id },
+        $or: [{ userId: "" }, { userId: user.id }],
+      }),
+    ]);
+    const total = totals[0]?.total || 0;
+    const correct = totals[0]?.correct || 0;
     res.json({
       data: {
         greetingName: user.firstName,

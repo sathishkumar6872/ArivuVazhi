@@ -855,6 +855,14 @@ export function MockResultScreen({ attemptId, back }: { attemptId: string; back:
               </View>
             ))}
           </View>
+          {result.weakAreas?.length ? (
+            <Card>
+              <Text style={{ color: palette.ink, fontWeight: "800", marginBottom: 6 }}>Weak areas to revise</Text>
+              {result.weakAreas.map((area: { topicId: string; topic: string; attempted: number; accuracy: number }) => (
+                <Text key={area.topicId} style={{ color: palette.muted }}>{area.topic}: {area.accuracy}% across {area.attempted}</Text>
+              ))}
+            </Card>
+          ) : null}
           <Text style={{ color: palette.ink, fontSize: 18, fontWeight: "800", marginBottom: 8 }}>Review answers</Text>
           {(result.questions || []).map((question: any, index: number) => (
             <Card key={question.id}>

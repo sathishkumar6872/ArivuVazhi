@@ -1,6 +1,16 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
-async function refresh(): Promise<boolean> {
+let refreshInFlight: Promise<boolean> | null = null;
+
+// Single-flight: concurrent 401s share one refresh so the rotating token is only used once.
+function refresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().catch(() => false).finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
   const refreshToken = localStorage.getItem("av_admin_refresh");
   if (!refreshToken) return false;
   const response = await fetch(`${API_URL}/auth/refresh`, {
@@ -8,7 +18,11 @@ async function refresh(): Promise<boolean> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken }),
   });
-  if (!response.ok) return false;
+  if (!response.ok) {
+    localStorage.removeItem("av_admin_access");
+    localStorage.removeItem("av_admin_refresh");
+    return false;
+  }
   const payload = await response.json();
   localStorage.setItem("av_admin_access", payload.data.accessToken);
   localStorage.setItem("av_admin_refresh", payload.data.refreshToken);

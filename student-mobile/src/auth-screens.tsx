@@ -90,7 +90,7 @@ export function AuthFlow({ onDone }: { onDone: (user: Student) => void }) {
     const slides = [
       { title: "Your Government Exam Journey Starts Here", body: "Learn smarter, practice better, and achieve your goal with AI." },
       { title: "Practice with real exam patterns", body: "Mocks, previous papers and topic practice stay inside approved content." },
-      { title: "AI tutor in Tamil, English or Tanglish", body: "Ask doubts with text, image or PDF. Voice needs the OpenAI provider." },
+      { title: "AI tutor in Tamil, English or Tanglish", body: "Type your doubts in Tamil, English or Tanglish and pick up past conversations from your search history." },
     ];
     const slide = slides[splashPage];
     return (

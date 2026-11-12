@@ -10,8 +10,8 @@ import { AuthShowcase } from "@/components/AuthShowcase";
 export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState("anitha@arivuvazhi.in");
-  const [password, setPassword] = useState("Student@12345");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");

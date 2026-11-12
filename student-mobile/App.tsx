@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Platform, View } from "react-native";
-import { api, storageClearSession, storageGet, syncOfflineQueue, type Student } from "./src/api";
+import { AppState, Platform, View } from "react-native";
+import { api, logoutSession, storageClearSession, storageGet, syncOfflineQueue, type Student } from "./src/api";
 import { AuthFlow, Onboarding, Splash } from "./src/auth-screens";
 import { AlertsScreen, AnalyticsScreen, HomeScreen, PlannerScreen } from "./src/home-screens";
 import { BookmarksScreen, ExamScreen, ExamsScreen, MockIntroScreen, MockResultScreen, MockRunScreen, MocksScreen, PracticeResultScreen, PracticeScreen, PyqPaperScreen, PyqScreen, QuizScreen, TopicsScreen } from "./src/learn-screens";
@@ -79,12 +79,19 @@ function Root() {
       } catch { await storageClearSession(); }
     }).finally(() => setReady(true));
   }, []);
+  useEffect(() => {
+    if (!user) return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncOfflineQueue().catch(() => null);
+    });
+    return () => subscription.remove();
+  }, [user]);
   if (!ready) return <Splash />;
   if (!user) return <AuthFlow onDone={setUser} />;
   if (!user.onboardingComplete) return <Onboarding user={user} onDone={setUser} />;
   return (
     <LocaleProvider language={user.preferences?.appLanguage || user.language}>
-      <Shell user={user} setUser={setUser} onLogout={async () => { await storageClearSession(); setUser(null); }} />
+      <Shell user={user} setUser={setUser} onLogout={async () => { await logoutSession(); setUser(null); }} />
     </LocaleProvider>
   );
 }

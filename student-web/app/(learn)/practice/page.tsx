@@ -107,7 +107,7 @@ export default function PracticePage() {
         <Card sx={{ p: { xs: 2, md: 4 }, maxWidth: 760 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", mb: 2 }}>
             <Typography color="primary" fontWeight={800}>Question {index + 1} of {questions.length}</Typography>
-            <Typography color="text.secondary" fontWeight={700}>{topics.find((topic) => topic.id === topicId)?.name || exams.find((exam) => exam.id === examId)?.name}</Typography>
+            <Typography color="text.secondary" fontWeight={700}>{topics.find((topic) => topic.id === topicId)?.name || exams?.find((exam) => exam.id === examId)?.name}</Typography>
           </Box>
           <Typography sx={{ fontSize: 22, fontWeight: 800, mb: 2 }}>{question.stem}</Typography>
           <Box sx={{ display: "grid", gap: 1.2 }}>

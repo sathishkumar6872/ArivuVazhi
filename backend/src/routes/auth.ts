@@ -100,12 +100,12 @@ authRouter.post(
       throw new HttpError(401, "Refresh token is invalid", "UNAUTHORIZED");
     }
     if (payload.typ !== "refresh") throw new HttpError(401, "Refresh token is invalid", "UNAUTHORIZED");
-    const stored = await RefreshToken.findOne({ tokenHash: sha256(token), userId: payload.sub });
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
-      throw new HttpError(401, "Refresh token is revoked or expired", "UNAUTHORIZED");
-    }
-    stored.revokedAt = new Date();
-    await stored.save();
+    // Atomic claim: of two concurrent refreshes with the same token only one wins.
+    const stored = await RefreshToken.findOneAndUpdate(
+      { tokenHash: sha256(token), userId: payload.sub, revokedAt: null, expiresAt: { $gt: new Date() } },
+      { $set: { revokedAt: new Date() } },
+    );
+    if (!stored) throw new HttpError(401, "Refresh token is revoked or expired", "UNAUTHORIZED");
     const user = await User.findOne({ id: payload.sub }).lean();
     if (!user || user.status === "suspended") throw new HttpError(401, "Account is not available", "UNAUTHORIZED");
     const tokens = await issueSession(user);
