@@ -4,21 +4,21 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, type Student } from "./api";
 import type { Route } from "./nav";
 import { useTheme } from "./theme";
-import { Banner, Button, Card, Dialog, Empty, Field, Header, IconButton, Loading, Screen } from "./ui";
+import { Banner, Button, Card, ColorIcon, Dialog, Empty, Field, Header, IconButton, Loading, Screen, type Accent } from "./ui";
 import { useLocale } from "./locale";
 
 export function ProfileScreen({ user, go, logout }: { user: Student; go: (route: Route) => void; logout: () => void }) {
   const { palette } = useTheme();
   const { t } = useLocale();
   const [confirm, setConfirm] = useState(false);
-  const quick: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: Route }> = [
-    { label: "Analytics", icon: "stats-chart-outline", route: { name: "analytics" } },
-    { label: "Notes", icon: "document-text-outline", route: { name: "notes" } },
-    { label: "Bookmarks", icon: "bookmark-outline", route: { name: "bookmarks" } },
-    { label: "Achievements", icon: "ribbon-outline", route: { name: "achievements" } },
+  const quick: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; accent: Accent; route: Route }> = [
+    { label: "Analytics", icon: "bar-chart", accent: "orange", route: { name: "analytics" } },
+    { label: "Notes", icon: "document-text", accent: "blue", route: { name: "notes" } },
+    { label: "Bookmarks", icon: "bookmark", accent: "red", route: { name: "bookmarks" } },
+    { label: "Achievements", icon: "trophy", accent: "purple", route: { name: "achievements" } },
   ];
   const rows: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: Route }> = [
-    { label: "Edit profile", icon: "create-outline", route: { name: "editProfile" } },
+    { label: "Edit profile", icon: "person-outline", route: { name: "editProfile" } },
     { label: "Settings", icon: "settings-outline", route: { name: "settings" } },
     { label: "AI memory", icon: "sparkles-outline", route: { name: "settings" } },
     { label: "Help and support", icon: "help-circle-outline", route: { name: "support" } },
@@ -46,8 +46,8 @@ export function ProfileScreen({ user, go, logout }: { user: Student; go: (route:
       <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", marginBottom: 8 }}>
         {quick.map((item) => (
           <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.label} onPress={() => go(item.route)} style={{ width: "23%", alignItems: "center", marginBottom: 12 }}>
-            <View style={{ width: 52, height: 52, borderRadius: 16, backgroundColor: palette.mint, alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-              <Ionicons name={item.icon} size={22} color={palette.primary} />
+            <View style={{ marginBottom: 6 }}>
+              <ColorIcon icon={item.icon} accent={item.accent} size={52} />
             </View>
             <Text style={{ color: palette.ink, fontSize: 11, fontWeight: "700", textAlign: "center" }}>{t(item.label)}</Text>
           </Pressable>
@@ -57,8 +57,8 @@ export function ProfileScreen({ user, go, logout }: { user: Student; go: (route:
       <Card style={{ paddingVertical: 4, marginBottom: 12 }}>
         {rows.map((row, index) => (
           <Pressable key={row.label} accessibilityRole="button" accessibilityLabel={row.label} onPress={() => go(row.route)} style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, borderTopWidth: index ? 1 : 0, borderTopColor: palette.line }}>
-            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: palette.greenSoft, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name={row.icon} size={18} color={palette.primary} />
+            <View style={{ width: 28, alignItems: "center" }}>
+              <Ionicons name={row.icon} size={22} color={palette.ink} />
             </View>
             <Text style={{ flex: 1, color: palette.ink, fontWeight: "700" }}>{t(row.label)}</Text>
             <Ionicons name="chevron-forward" size={16} color={palette.muted} />
@@ -67,7 +67,7 @@ export function ProfileScreen({ user, go, logout }: { user: Student; go: (route:
       </Card>
 
       <Pressable accessibilityRole="button" accessibilityLabel="Logout" onPress={() => setConfirm(true)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 16, backgroundColor: palette.dangerSoft, padding: 14 }}>
-        <Ionicons name="log-out-outline" size={18} color={palette.danger} />
+        <Ionicons name="power" size={20} color={palette.danger} />
         <Text style={{ color: palette.danger, fontWeight: "800" }}>{t("Logout")}</Text>
       </Pressable>
       <Dialog visible={confirm} title="Log out?" body="This device will forget the session. You can sign in again." confirm="Logout" cancel="Stay" danger onCancel={() => setConfirm(false)} onConfirm={logout} />

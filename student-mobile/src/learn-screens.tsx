@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, type Student } from "./api";
 import type { Route } from "./nav";
 import { useTheme } from "./theme";
-import { Banner, Button, Card, Choice, Dialog, Empty, Header, Loading, Pill, Progress, ScoreRing, Screen, Segment, Sheet } from "./ui";
+import { Banner, Button, Card, Choice, ColorIcon, Dialog, Empty, Header, Loading, Pill, Progress, ScoreRing, Screen, Segment, Sheet, accentAt, subjectVisual } from "./ui";
 
 export function ExamsScreen({ user, go }: { user: Student; go: (route: Route) => void }) {
   const { palette } = useTheme();
@@ -20,14 +20,12 @@ export function ExamsScreen({ user, go }: { user: Student; go: (route: Route) =>
       <Segment options={["My Exams", "All Exams"]} value={tab} onChange={setTab} />
       {error ? <Banner message={error} /> : null}
       {!exams && !error ? <Loading /> : null}
-      {list.map((exam) => {
+      {list.map((exam, index) => {
         const current = exam.id === user.primaryExamId;
         return (
           <Card key={exam.id} onPress={() => go({ name: "exam", examId: exam.id })} style={current ? { backgroundColor: palette.greenSoft, borderColor: palette.green } : undefined}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: current ? palette.mint : palette.greenSoft, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="document-text" size={18} color={palette.primary} />
-              </View>
+              <ColorIcon icon="school" accent={current ? "green" : accentAt(index + 1)} size={44} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: palette.primary, fontWeight: "800" }}>{exam.name}</Text>
                 <Text style={{ color: palette.muted, marginTop: 2 }}>{current ? "Your current exam" : exam.authority}</Text>
@@ -129,7 +127,8 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
 
       {exam && tab === "Syllabus" && (
         subjects.length ? (
-          subjects.map((subject: any) => {
+          subjects.map((subject: any, subjectIndex: number) => {
+            const visual = subjectVisual(subject.name, subjectIndex);
             const total = subject.topics?.length || 0;
             const studied = (subject.topics || []).filter((topic: any) => topic.studied).length;
             const percent = total ? Math.round((studied / total) * 100) : 0;
@@ -145,7 +144,8 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
                   })
                 }
               >
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                  <ColorIcon icon={visual.icon} accent={visual.accent} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: palette.ink, fontWeight: "800" }}>{subject.name}</Text>
                     <Text style={{ color: palette.muted, marginTop: 4 }}>
@@ -441,18 +441,25 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
           ) : null}
         </View>
       )}
-      {!loading && tab === "Subjects" && user.primaryExamId && subjects.map((subject: any) => {
+      {!loading && tab === "Subjects" && user.primaryExamId && subjects.map((subject: any, subjectIndex: number) => {
         const rows = subject.topics || [];
         const studied = rows.filter((topic: any) => topic.studied).length;
         const percent = rows.length ? Math.round((studied / rows.length) * 100) : 0;
+        const visual = subjectVisual(subject.name, subjectIndex);
         return (
           <Card key={subject.id} onPress={() => go({ name: "topics", subjectId: subject.id, subjectName: subject.name, examId: user.primaryExamId })}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={{ color: palette.ink, fontWeight: "800", flex: 1 }}>{subject.name}</Text>
-              <Text style={{ color: palette.green, fontWeight: "800" }}>{percent}%</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <ColorIcon icon={visual.icon} accent={visual.accent} />
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={{ color: palette.ink, fontWeight: "800", flex: 1 }}>{subject.name}</Text>
+                  <Text style={{ color: palette.green, fontWeight: "800" }}>{percent}%</Text>
+                </View>
+                <Progress value={percent} />
+                <Text style={{ color: palette.muted }}>{rows.length} topics</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.muted} />
             </View>
-            <Progress value={percent} />
-            <Text style={{ color: palette.muted }}>{rows.length} topics</Text>
           </Card>
         );
       })}
@@ -689,52 +696,112 @@ export function BookmarksScreen({ back }: { back: () => void }) {
   );
 }
 
-export function MocksScreen({ go, back }: { go: (route: Route) => void; back: () => void }) {
-  const { palette } = useTheme();
+/** How today's personal mock stands, for a list row or the intro screen. */
+function mockReadiness(mock: any): { label: string; tone: "soft" | "good" | "warn"; ready: boolean; detail: string } {
+  if (mock.todayStatus === "submitted") return { label: "Attempted", tone: "soft", ready: false, detail: "" };
+  if (mock.todayStatus === "in_progress") return { label: "Continue", tone: "good", ready: true, detail: "" };
+  if (mock.todaySet === "ready") return { label: "Ready", tone: "good", ready: true, detail: "" };
+  const prep = mock.preparation;
+  if (mock.todaySet === "failed") return { label: "Not ready", tone: "warn", ready: false, detail: prep?.error || "Preparation failed. It will be retried." };
+  if (mock.todaySet === "generating") {
+    return { label: "Preparing", tone: "soft", ready: false, detail: prep?.total ? `Preparing your questions: ${prep.done} of ${prep.total}` : "Preparing your questions" };
+  }
+  return { label: "Not ready", tone: "soft", ready: false, detail: "Today's questions are not prepared yet." };
+}
+
+/** Reload the mock list every 10 s while today's set is still being prepared. */
+function useMocks(watch: (list: any[]) => boolean) {
   const [mocks, setMocks] = useState<any[] | null>(null);
   const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api<any[]>("/mocks").then((list) => { if (alive) { setMocks(list); setError(""); } }).catch((err) => alive && setError(err.message));
+    return () => { alive = false; };
+  }, [tick]);
+  const waiting = mocks ? watch(mocks) : false;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => setTick((value) => value + 1), 10_000);
+    return () => clearTimeout(timer);
+  }, [waiting, mocks]);
+  return { mocks, error, reload: () => setTick((value) => value + 1) };
+}
+
+export function MocksScreen({ go, back }: { go: (route: Route) => void; back: () => void }) {
+  const { palette } = useTheme();
   const [tab, setTab] = useState("Available");
-  useEffect(() => { api<any[]>("/mocks").then(setMocks).catch((err) => setError(err.message)); }, []);
+  const { mocks, error } = useMocks((list) => list.some((mock) => mock.todaySet === "generating"));
   const list = (mocks || []).filter((mock) => tab === "Attempted" ? mock.todayStatus === "submitted" || mock.lastScore : mock.todayStatus !== "submitted");
   return (
     <Screen>
-      <Header title="Mock tests" subtitle="One attempt per mock each day" onBack={back} />
+      <Header title="Mock tests" subtitle="A fresh full mock of your exam every day" onBack={back} />
       <Segment options={["Available", "Attempted"]} value={tab} onChange={setTab} />
       {error ? <Banner message={error} /> : null}
       {!mocks && !error ? <Loading /> : null}
-      {list.map((mock) => (
-        <Card key={mock.id} onPress={() => mock.todayStatus === "submitted" ? go({ name: "mockResult", attemptId: mock.todayAttemptId }) : go({ name: "mockIntro", mockId: mock.id })}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-            <Text style={{ color: palette.ink, fontWeight: "700", flex: 1 }}>{mock.title}</Text>
-            <Pill label={mock.todayStatus === "submitted" ? "Attempted" : mock.todayStatus === "in_progress" ? "Continue" : "Available"} tone={mock.todayStatus === "submitted" ? "soft" : "good"} />
-          </View>
-          <Text style={{ color: palette.muted }}>{mock.questionCount} questions · {mock.durationMinutes} min</Text>
-          {mock.lastScore ? <Text style={{ color: palette.muted }}>Last score {mock.lastScore.rawScore}/{mock.lastScore.maxScore}</Text> : null}
-        </Card>
-      ))}
-      {mocks && !list.length && <Empty title={tab === "Available" ? "Nothing available" : "No attempts yet"} body={tab === "Available" ? "Every published mock for today is already submitted." : "Finish a mock to see it here. The server keeps the score."} />}
+      {list.map((mock) => {
+        const state = mockReadiness(mock);
+        return (
+          <Card key={mock.id} onPress={() => mock.todayStatus === "submitted" ? go({ name: "mockResult", attemptId: mock.todayAttemptId }) : go({ name: "mockIntro", mockId: mock.id })}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+              <Text style={{ color: palette.ink, fontWeight: "700", flex: 1 }}>{mock.title}</Text>
+              <Pill label={state.label} tone={state.tone} />
+            </View>
+            <Text style={{ color: palette.muted }}>{mock.questionCount} questions · {mock.durationMinutes} min</Text>
+            {tab === "Available" && state.detail ? <Text style={{ color: palette.muted, marginTop: 4 }}>{state.detail}</Text> : null}
+            {mock.lastScore ? <Text style={{ color: palette.muted }}>Last score {mock.lastScore.rawScore}/{mock.lastScore.maxScore}</Text> : null}
+          </Card>
+        );
+      })}
+      {mocks && !list.length && (
+        <Empty
+          title={tab === "Available" ? (mocks.length ? "Done for today" : "No mock yet") : "No attempts yet"}
+          body={tab === "Available" ? (mocks.length ? "Today's mock is submitted. A new one is prepared at 2:00 AM." : "Choose your exam first. Its daily mock appears here.") : "Finish a mock to see it here. The server keeps the score."}
+        />
+      )}
     </Screen>
   );
 }
 
 export function MockIntroScreen({ mockId, go, back }: { mockId: string; go: (route: Route) => void; back: () => void }) {
   const { palette } = useTheme();
-  const [mock, setMock] = useState<any>(null);
-  useEffect(() => { api<any[]>("/mocks").then((list) => setMock(list.find((item) => item.id === mockId) || null)); }, [mockId]);
+  const [note, setNote] = useState("");
+  const { mocks, error, reload } = useMocks((list) => list.find((item) => item.id === mockId)?.todaySet === "generating");
+  const mock = mocks ? mocks.find((item) => item.id === mockId) || null : undefined;
+  const state = mock ? mockReadiness(mock) : null;
+  async function prepare() {
+    // The start call begins preparing today's set when it does not exist yet.
+    try {
+      await api(`/mocks/${mockId}/start`, { method: "POST", body: JSON.stringify({ idempotencyKey: `mobile-prepare-${mockId}` }) });
+      go({ name: "mockRun", mockId });
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not prepare the mock");
+      reload();
+    }
+  }
   return (
     <Screen>
       <Header title={mock?.title || "Mock test"} onBack={back} />
-      {!mock ? <Loading /> : (
+      {error ? <Banner message={error} /> : null}
+      {mock === undefined && !error ? <Loading /> : null}
+      {mock === null ? <Empty title="Mock not found" body="Go back and open the mock list again." /> : null}
+      {mock && state ? (
         <View>
           <Card>
             <Text style={{ color: palette.ink, fontWeight: "700" }}>{mock.questionCount} questions · {mock.durationMinutes} minutes</Text>
             <Text style={{ color: palette.muted, marginTop: 6 }}>{mock.marksPerQuestion} marks each · negative {mock.negativeMarks}</Text>
           </Card>
           {(mock.instructions || []).map((line: string) => <Text key={line} style={{ color: palette.muted, marginBottom: 8, lineHeight: 20 }}>{line}</Text>)}
-          <Text style={{ color: palette.muted, marginBottom: 8 }}>The timer and score are controlled by the server. You can mark questions for review.</Text>
-          <Button label={mock.todayStatus === "in_progress" ? "Continue test" : "Start test"} onPress={() => go({ name: "mockRun", mockId })} />
+          {!state.ready ? <Banner tone="info" message={note || state.detail} /> : null}
+          {state.ready ? (
+            <Button label={mock.todayStatus === "in_progress" ? "Continue test" : "Start test"} onPress={() => go({ name: "mockRun", mockId })} />
+          ) : mock.todaySet === "generating" ? (
+            <Button label="Preparing questions" disabled loading onPress={() => undefined} />
+          ) : (
+            <Button label="Prepare today's mock" onPress={prepare} />
+          )}
         </View>
-      )}
+      ) : null}
     </Screen>
   );
 }
@@ -816,7 +883,7 @@ export function MockRunScreen({ mockId, onDone }: { mockId: string; onDone: (rou
           </View>
         </View>
       )}
-      <Dialog visible={confirm} title="Submit this test?" body="You can submit once today. Unanswered questions stay blank. The server calculates the score." confirm="Submit" cancel="Keep working" onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); submit(); }} />
+      <Dialog visible={confirm} title="Submit this test?" body="You can submit once today. Unanswered questions stay blank. The server calculates the score." confirm="Submit" cancel="Keep working" onCancel={() => setConfirm(false)} onConfirm={async () => { await submit(); setConfirm(false); }} />
       <Sheet visible={paletteOpen} title="Questions" onClose={() => setPaletteOpen(false)}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {(attempt?.questions || []).map((item: any, itemIndex: number) => {

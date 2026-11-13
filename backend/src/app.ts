@@ -13,7 +13,7 @@ import { authRouter } from "./routes/auth.js";
 import { studentRouter } from "./routes/student.js";
 import { learningRouter } from "./routes/learning.js";
 import { adminRouter } from "./routes/admin.js";
-import { runDailyMockJob } from "./jobs.js";
+import { getDailyMockRun, startDailyMockJob } from "./jobs.js";
 import crypto from "node:crypto";
 
 function safeEqual(left: string, right: string) {
@@ -64,14 +64,35 @@ export function createApp() {
     res.status(db === "up" ? 200 : 503).json({ data: { status: db === "up" ? "ok" : "degraded", db, service: "arivuvazhi-api" } });
   });
   // External cron trigger for hosts that sleep at 02:00 (e.g. free tiers). Disabled unless CRON_SECRET is set.
-  app.post("/api/v1/internal/jobs/daily-mocks", (req, res, next) => {
+  // The cron gets a runId back and polls GET .../daily-mocks/:runId until `finished` is true.
+  const cronOnly: express.RequestHandler = (req, _res, next) => {
     const secret = config.cronSecret;
     const given = req.headers["x-cron-secret"];
     if (!secret || typeof given !== "string" || !safeEqual(given, secret)) {
       return next(new HttpError(404, "Route not found", "NOT_FOUND"));
     }
-    void runDailyMockJob("manual").catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
-    res.status(202).json({ data: { started: true } });
+    next();
+  };
+  app.post("/api/v1/internal/jobs/daily-mocks", cronOnly, async (_req, res, next) => {
+    try {
+      const start = await startDailyMockJob("manual");
+      if (start.started) {
+        void start.done.catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
+        return res.status(202).json({ data: { started: true, runId: start.runId, statusUrl: `/api/v1/internal/jobs/daily-mocks/${start.runId}` } });
+      }
+      res.status(200).json({ data: { started: false, reason: start.reason, runId: start.runId } });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get("/api/v1/internal/jobs/daily-mocks/:runId", cronOnly, async (req, res, next) => {
+    try {
+      const run = await getDailyMockRun(req.params.runId);
+      if (!run) return next(new HttpError(404, "Job run not found", "NOT_FOUND"));
+      res.json({ data: run });
+    } catch (error) {
+      next(error);
+    }
   });
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1", studentRouter);

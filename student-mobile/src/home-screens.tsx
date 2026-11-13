@@ -26,8 +26,14 @@ export function HomeScreen({ user, go }: { user: Student; go: (route: Route) => 
   const resume = mocks.find((mock) => mock.todayStatus === "in_progress");
   async function toggle(task: any) {
     const status = task.status === "completed" ? "pending" : "completed";
-    await api(`/planner/${task.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    setData({ ...data, tasks: tasks.map((item: any) => item.id === task.id ? { ...item, status } : item) });
+    const setStatus = (value: string) =>
+      setData((current: any) => current && { ...current, tasks: (current.tasks || []).map((item: any) => item.id === task.id ? { ...item, status: value } : item) });
+    setStatus(status); // tick immediately; roll back if the server refuses
+    try {
+      await api(`/planner/${task.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    } catch {
+      setStatus(task.status);
+    }
   }
   const name = data?.greetingName || user.firstName;
   const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "numeric", hourCycle: "h23" }).format(new Date()));
@@ -90,12 +96,12 @@ export function HomeScreen({ user, go }: { user: Student; go: (route: Route) => 
 
           <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800", marginTop: 18, marginBottom: 8 }}>Quick actions</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" }}>
-            <IconTile icon="create-outline" label="Practice" onPress={() => go({ name: "practice" })} />
-            <IconTile icon="document-text-outline" label="Mock Tests" onPress={() => go({ name: "mocks" })} />
-            <IconTile icon="chatbubble-ellipses-outline" label="AI Tutor" onPress={() => go({ name: "tutor" })} />
-            <IconTile icon="library-outline" label="Syllabus" onPress={() => go({ name: "exams" })} />
-            <IconTile icon="calendar-outline" label="Study Plan" onPress={() => go({ name: "planner" })} />
-            <IconTile icon="stats-chart-outline" label="Analytics" onPress={() => go({ name: "analytics" })} />
+            <IconTile icon="clipboard" accent="green" label="Practice" onPress={() => go({ name: "practice" })} />
+            <IconTile icon="timer" accent="olive" label="Mock Tests" onPress={() => go({ name: "mocks" })} />
+            <IconTile icon="sparkles" accent="purple" label="AI Tutor" onPress={() => go({ name: "tutor" })} />
+            <IconTile icon="book" accent="green" label="Syllabus" onPress={() => go({ name: "exams" })} />
+            <IconTile icon="calendar" accent="green" label="Study Plan" onPress={() => go({ name: "planner" })} />
+            <IconTile icon="bar-chart" accent="orange" label="Analytics" onPress={() => go({ name: "analytics" })} />
           </View>
 
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8, marginBottom: 8 }}>
@@ -181,7 +187,17 @@ export function PlannerScreen({ back }: { back: () => void }) {
         ))}
       </View>
       {tasks.map((task) => (
-        <Pressable key={task.id} accessibilityRole="button" accessibilityLabel={task.title} onPress={async () => { await api(`/planner/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: task.status === "completed" ? "pending" : "completed" }) }); await load(day); }} style={{ flexDirection: "row", gap: 12, alignItems: "center", backgroundColor: palette.surface, borderRadius: 16, borderWidth: 1, borderColor: palette.line, padding: 14, marginBottom: 8 }}>
+        <Pressable key={task.id} accessibilityRole="button" accessibilityLabel={task.title} onPress={async () => {
+          const status = task.status === "completed" ? "pending" : "completed";
+          const setStatus = (value: string) => setTasks((current) => current.map((item) => item.id === task.id ? { ...item, status: value } : item));
+          setStatus(status); // tick immediately; roll back if the server refuses
+          try {
+            await api(`/planner/${task.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+          } catch (err) {
+            setStatus(task.status);
+            setError(err instanceof Error ? err.message : "Could not update task");
+          }
+        }} style={{ flexDirection: "row", gap: 12, alignItems: "center", backgroundColor: palette.surface, borderRadius: 16, borderWidth: 1, borderColor: palette.line, padding: 14, marginBottom: 8 }}>
           <Ionicons name={task.status === "completed" ? "checkmark-circle" : "ellipse-outline"} size={22} color={task.status === "completed" ? palette.green : "#C5D0C9"} />
           <Text style={{ flex: 1, color: palette.ink, fontWeight: "600" }}>{task.title}</Text>
           <Text style={{ color: palette.muted }}>{task.minutes}m</Text>

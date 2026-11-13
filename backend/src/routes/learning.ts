@@ -4,7 +4,11 @@ import { requireAuth } from "../auth.js";
 import { detectStudentLanguage, transcribeAudio, tutorReply } from "../ai.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "../ai-budget.js";
 import { dayKey, HttpError, nid, wrap } from "../http.js";
-import { ensurePracticeQuestions, pickMockQuestionIds, visibleToStudent } from "../question-ai.js";
+import { ensurePracticeQuestions, visibleToStudent } from "../question-ai.js";
+import { DAILY_SET_STALE_MS, generateDailyMockSet, generatingAgeMs, studentDailyMocks } from "../daily-mock.js";
+
+/** After a failure, wait this long before a mock start triggers a fresh attempt (avoids hammering a broken provider). */
+const MOCK_RETRY_AFTER_MS = 10 * 60 * 1000;
 import { scoreAttempt } from "../scoring.js";
 import { escapeRegex } from "../governance.js";
 import {
@@ -194,32 +198,37 @@ learningRouter.get(
 learningRouter.get(
   "/mocks",
   wrap(async (req, res) => {
-    const filter: Record<string, unknown> = { status: "published" };
-    if (typeof req.query.examId === "string") filter.examId = req.query.examId;
-    const mocks = await MockTest.find(filter).lean();
+    // Only the daily mock of the student's own exams (primary first); built from each exam's pattern.
+    let mocks = await studentDailyMocks(studentId(req));
+    if (typeof req.query.examId === "string") mocks = mocks.filter((mock) => mock.examId === req.query.examId);
     const today = dayKey();
     const [attempts, sets] = await Promise.all([
-      MockAttempt.find({ studentId: studentId(req) }).sort({ createdAt: -1 }).lean(),
-      DailyMockSet.find({ studentId: studentId(req), dayKey: today }).select("mockId status").lean(),
+      MockAttempt.find({ studentId: studentId(req), mockId: { $in: mocks.map((mock) => mock.id) } }).sort({ createdAt: -1 }).lean(),
+      DailyMockSet.find({ studentId: studentId(req), dayKey: today, mockId: { $in: mocks.map((mock) => mock.id) } })
+        .select("mockId status target progress error updatedAt startedAt questionIds")
+        .lean(),
     ]);
-    const setStatus = new Map(sets.map((set) => [set.mockId, set.status]));
+    const setFor = new Map(sets.map((set) => [set.mockId, set]));
     res.json({
       data: mocks.map((mock) => {
         const mine = attempts.filter((attempt) => attempt.mockId === mock.id);
         const todayAttempt = mine.find((attempt) => attempt.dayKey === today);
         const lastSubmitted = mine.find((attempt) => attempt.status === "submitted");
+        const set = setFor.get(mock.id);
+        const stalled = set?.status === "generating" && generatingAgeMs(set) >= DAILY_SET_STALE_MS;
         return {
           id: mock.id,
           examId: mock.examId,
           title: mock.title,
           durationMinutes: mock.durationMinutes,
-          questionCount: mock.questionIds.length,
+          questionCount: set?.status === "ready" ? set.questionIds.length : set?.target || patternCount(mock.instructions),
           marksPerQuestion: mock.marksPerQuestion,
           negativeMarks: mock.negativeMarks,
           instructions: mock.instructions,
           todayStatus: todayAttempt?.status || "available",
-          /** ready = personal set generated at 02:00 IST; otherwise the approved bank is used. */
-          todaySet: setStatus.get(mock.id) || "not_prepared",
+          /** ready = today's personal set is generated; generating = being prepared now. */
+          todaySet: !set || stalled ? "not_prepared" : set.status,
+          preparation: set ? { done: set.progress || 0, total: set.target || 0, error: set.status === "failed" ? set.error : "" } : null,
           todayAttemptId: todayAttempt?.id || "",
           lastScore: lastSubmitted ? { rawScore: lastSubmitted.rawScore, maxScore: lastSubmitted.maxScore } : null,
         };
@@ -228,11 +237,20 @@ learningRouter.get(
   }),
 );
 
+/** Question count stated in a daily mock's first instruction ("200 questions · …"). */
+function patternCount(instructions: string[] = []) {
+  return Number(/^(\d+) questions/.exec(instructions[0] || "")?.[1] || 0);
+}
+
 learningRouter.post(
   "/mocks/:id/start",
   wrap(async (req, res) => {
-    const mock = await MockTest.findOne({ id: req.params.id, status: "published" });
+    const mock = await MockTest.findOne({ id: req.params.id, status: "published", kind: "daily" });
     if (!mock) throw new HttpError(404, "Mock test not found", "NOT_FOUND");
+    const me = await User.findOne({ id: studentId(req) }).select("primaryExamId examIds").lean();
+    if (!me || (me.primaryExamId !== mock.examId && !(me.examIds || []).includes(mock.examId))) {
+      throw new HttpError(403, "This mock belongs to an exam you have not selected.", "FORBIDDEN");
+    }
     const today = dayKey();
     const existing = await MockAttempt.findOne({ studentId: studentId(req), mockId: mock.id, dayKey: today });
     if (existing?.status === "submitted") {
@@ -249,22 +267,31 @@ learningRouter.post(
       return res.json({ data: presentAttempt(existing, questions, ids) });
     }
 
-    const exam = await Exam.findOne({ id: mock.examId }).select("pattern").lean();
-    const targetCount = Math.min(100, Math.max(5, exam?.pattern?.totalQuestions || 20));
     // Freeze the question set and marking rules on the attempt; never mutate the shared mock.
-    const dailySet = await DailyMockSet.findOne({ studentId: studentId(req), mockId: mock.id, dayKey: today, status: "ready" }).lean();
-    if (!dailySet) {
-      const pending = await DailyMockSet.exists({ studentId: studentId(req), mockId: mock.id, dayKey: today, status: "generating" });
-      if (pending) throw new HttpError(409, "Today's mock is still being prepared. Please try again in a minute.", "MOCK_PREPARING");
+    // The mock is always today's personal set built from the exam pattern — never a partial bank sample.
+    const owner = studentId(req);
+    const dailySet = await DailyMockSet.findOne({ studentId: owner, mockId: mock.id, dayKey: today }).lean();
+    if (dailySet?.status !== "ready" || !dailySet.questionIds.length) {
+      const inProgress = dailySet?.status === "generating" && generatingAgeMs(dailySet) < DAILY_SET_STALE_MS;
+      const recentFailure = dailySet?.status === "failed" && generatingAgeMs(dailySet) < MOCK_RETRY_AFTER_MS;
+      if (recentFailure) {
+        throw new HttpError(503, `Today's mock could not be prepared: ${dailySet.error || "AI provider error"}. It will be retried shortly.`, "MOCK_UNAVAILABLE");
+      }
+      if (!inProgress) {
+        // Not started yet (new student, missed run) or abandoned: build it now in the background.
+        void generateDailyMockSet({ studentId: owner, mockId: mock.id, dayKey: today }).catch((error) =>
+          console.warn(`Daily mock for ${owner} failed: ${error instanceof Error ? error.message : error}`),
+        );
+      }
+      const done = dailySet?.progress || 0;
+      const total = dailySet?.target || 0;
+      throw new HttpError(
+        409,
+        total ? `Today's mock is being prepared (${done} of ${total} questions). Please try again in a few minutes.` : "Today's mock is being prepared. Please try again in a few minutes.",
+        "MOCK_PREPARING",
+      );
     }
-    const questionIds = dailySet?.questionIds.length
-      ? [...dailySet.questionIds]
-      : await pickMockQuestionIds({
-          studentId: studentId(req),
-          examId: mock.examId,
-          configuredIds: mock.questionIds,
-          targetCount,
-        });
+    const questionIds = [...dailySet.questionIds];
     let attempt;
     try {
       attempt = await MockAttempt.create({

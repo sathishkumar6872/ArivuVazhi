@@ -269,10 +269,17 @@ export const MockTest = mongoose.model(
       negativeMarks: { type: Number, required: true },
       instructions: { type: [String], default: [] },
       status: { type: String, enum: ["draft", "published", "archived"], default: "draft" },
+      /**
+       * admin = authored in the admin portal; daily = the one per-exam mock whose
+       * questions are generated fresh for each student every day from the exam pattern.
+       */
+      kind: { type: String, enum: ["admin", "daily"], default: "admin" },
     },
     { timestamps: true },
   ),
 );
+
+MockTest.schema.index({ examId: 1, kind: 1 }, { unique: true, partialFilterExpression: { kind: "daily" } });
 
 export const MockAttempt = mongoose.model(
   "MockAttempt",
@@ -472,6 +479,19 @@ export const DailyMockSet = mongoose.model(
       status: { type: String, enum: ["generating", "ready", "failed"], default: "generating" },
       error: { type: String, default: "" },
       provider: { type: String, default: "" },
+      /** When the current generation attempt began; a stale "generating" set is retried. */
+      startedAt: { type: Date, default: null },
+      /** Questions the exam pattern asks for, and how many are generated so far. */
+      target: { type: Number, default: 0 },
+      progress: { type: Number, default: 0 },
+      /**
+       * Per-section plan mirroring the exam pattern. Kept across retries so a failed
+       * run continues where it stopped instead of regenerating everything.
+       */
+      sections: {
+        type: [{ _id: false, name: String, subjectId: String, target: Number, questionIds: { type: [String], default: [] } }],
+        default: [],
+      },
     },
     { timestamps: true },
   ),
@@ -493,6 +513,24 @@ export const JobRun = mongoose.model(
       skipped: { type: Number, default: 0 },
       finishedAt: { type: Date, default: null },
       error: { type: String, default: "" },
+    },
+    { timestamps: true },
+  ),
+);
+
+/**
+ * Cross-process lease for scheduled jobs: one document per job. A holder must
+ * renew `lockedUntil`; a crashed holder's lease simply expires.
+ */
+export const JobLock = mongoose.model(
+  "JobLock",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      owner: { type: String, default: "" },
+      /** The JobRun the holder is executing, so refused triggers can point at it. */
+      runId: { type: String, default: "" },
+      lockedUntil: { type: Date, default: () => new Date(0) },
     },
     { timestamps: true },
   ),

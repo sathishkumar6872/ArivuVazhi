@@ -6,12 +6,12 @@ import type { Route } from "./nav";
 import { useTheme } from "./theme";
 import { Ionicons } from "@expo/vector-icons";
 import { RichText } from "./rich-text";
-import { Banner, Button, Card, Empty, Header, IconButton, Loading, Screen, Segment } from "./ui";
+import { Banner, Button, Card, ColorIcon, Empty, Header, IconButton, Loading, Screen, Segment, type Accent } from "./ui";
 
-const starters: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; text: string }> = [
-  { label: "Explain", icon: "book-outline", text: "Explain this topic" },
-  { label: "Practice", icon: "help-circle-outline", text: "Give one practice question" },
-  { label: "Revise", icon: "refresh-outline", text: "Revise the last point" },
+const starters: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; accent: Accent; text: string }> = [
+  { label: "Explain", icon: "book", accent: "green", text: "Explain this topic" },
+  { label: "Practice", icon: "help-circle", accent: "orange", text: "Give one practice question" },
+  { label: "Revise", icon: "refresh", accent: "purple", text: "Revise the last point" },
 ];
 
 export function TutorScreen({ user, go }: { user: Student; go: (route: Route) => void }) {
@@ -56,8 +56,8 @@ export function TutorScreen({ user, go }: { user: Student; go: (route: Route) =>
             onPress={() => go({ name: "chat", starter: item.text })}
             style={{ flex: 1, alignItems: "center", backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.line, borderRadius: 16, paddingVertical: 12, paddingHorizontal: 4 }}
           >
-            <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: palette.mint, alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-              <Ionicons name={item.icon} size={18} color={palette.primary} />
+            <View style={{ marginBottom: 6 }}>
+              <ColorIcon icon={item.icon} accent={item.accent} size={40} />
             </View>
             <Text style={{ color: palette.ink, fontSize: 11, fontWeight: "700", textAlign: "center" }}>{item.label}</Text>
           </Pressable>

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StatusBar as RNStatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
@@ -64,21 +64,47 @@ export function Header({ title, subtitle, onBack, right }: { title: string; subt
   );
 }
 
-export function Button({ label, onPress, tone = "primary", disabled, icon, loading, iconOnly }: { label: string; onPress: () => void; tone?: "primary" | "ghost" | "danger" | "outline"; disabled?: boolean; icon?: IconName; loading?: boolean; iconOnly?: boolean }) {
+type PressHandler = () => void | Promise<unknown>;
+
+/**
+ * Wraps a press handler so an async handler shows a spinner and blocks repeat
+ * taps until it settles. Errors still propagate as before.
+ */
+function usePending(onPress: PressHandler) {
+  const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  const handle = () => {
+    if (inFlight.current) return;
+    const result = onPress();
+    if (!result || typeof (result as Promise<unknown>).then !== "function") return;
+    inFlight.current = true;
+    setPending(true);
+    void (result as Promise<unknown>).finally(() => {
+      inFlight.current = false;
+      if (mounted.current) setPending(false);
+    });
+  };
+  return { pending, handle };
+}
+
+export function Button({ label, onPress, tone = "primary", disabled, icon, loading, iconOnly }: { label: string; onPress: PressHandler; tone?: "primary" | "ghost" | "danger" | "outline"; disabled?: boolean; icon?: IconName; loading?: boolean; iconOnly?: boolean }) {
   const { palette } = useTheme();
-  const busy = !!loading;
+  const { pending, handle } = usePending(onPress);
+  const busy = !!loading || pending;
   const background = tone === "primary" ? palette.green : tone === "danger" ? palette.dangerSoft : tone === "outline" ? palette.surface : palette.mint;
   const color = tone === "primary" ? palette.greenInk : tone === "danger" ? palette.danger : palette.primary;
   const border = tone === "outline" ? palette.green : "transparent";
   if (iconOnly && icon) {
     return (
-      <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || busy} onPress={onPress} style={[styles.iconButton, { backgroundColor: background, borderColor: border, opacity: disabled || busy ? 0.45 : 1 }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || busy} onPress={handle} style={[styles.iconButton, { backgroundColor: background, borderColor: border, opacity: disabled || busy ? 0.45 : 1 }]}>
         {busy ? <ActivityIndicator color={color} /> : <Ionicons name={icon} size={18} color={color} />}
       </Pressable>
     );
   }
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || busy} onPress={onPress} style={[styles.button, { backgroundColor: background, borderColor: border, opacity: disabled || busy ? 0.45 : 1 }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || busy} onPress={handle} style={[styles.button, { backgroundColor: background, borderColor: border, opacity: disabled || busy ? 0.45 : 1 }]}>
       {busy ? <ActivityIndicator color={color} /> : null}
       {!busy && icon ? <Ionicons name={icon} size={16} color={color} /> : null}
       <Text style={[styles.buttonText, { color }]}>{busy ? (label.endsWith("...") ? label : `${label}...`) : label}</Text>
@@ -86,7 +112,7 @@ export function Button({ label, onPress, tone = "primary", disabled, icon, loadi
   );
 }
 
-export function IconButton({ label, icon, onPress, tone = "ghost", disabled, loading }: { label: string; icon: IconName; onPress: () => void; tone?: "primary" | "ghost" | "danger" | "outline"; disabled?: boolean; loading?: boolean }) {
+export function IconButton({ label, icon, onPress, tone = "ghost", disabled, loading }: { label: string; icon: IconName; onPress: PressHandler; tone?: "primary" | "ghost" | "danger" | "outline"; disabled?: boolean; loading?: boolean }) {
   return <Button label={label} icon={icon} onPress={onPress} tone={tone} disabled={disabled} loading={loading} iconOnly />;
 }
 
@@ -168,14 +194,83 @@ export function ScoreRing({ value, caption }: { value: number; caption: string }
   );
 }
 
-export function IconTile({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+/** Icon accent colours from the design board; tiles use a soft tint of the same colour. */
+export const ACCENTS = {
+  green: "#16A34A",
+  olive: "#4D7C0F",
+  purple: "#7C3AED",
+  orange: "#F59E0B",
+  red: "#EF4444",
+  blue: "#0EA5E9",
+  lime: "#65A30D",
+  teal: "#0D9488",
+} as const;
+export type Accent = keyof typeof ACCENTS;
+const ROTATION: Accent[] = ["green", "blue", "orange", "red", "purple", "teal", "lime"];
+
+/** Rotating accent for lists without a natural colour (exams, unknown subjects). */
+export function accentAt(index: number): Accent {
+  return ROTATION[index % ROTATION.length];
+}
+
+const SUBJECT_ICONS: Array<[RegExp, IconName, Accent]> = [
+  [/polity|constitution|civics|governance/, "shield-checkmark", "red"],
+  [/history|heritage|culture/, "hourglass", "orange"],
+  [/geograph|environment|ecology/, "earth", "blue"],
+  [/aptitude|mental ability|reasoning|math|quantitative|numer/, "calculator", "purple"],
+  [/current affairs|news/, "newspaper", "orange"],
+  [/tamil|english|language|grammar|literature/, "language", "green"],
+  [/science|physics|chemistry|biology/, "flask", "teal"],
+  [/econom|finance|budget|commerce/, "cash", "lime"],
+  [/general studies|general knowledge|\bgk\b/, "school", "green"],
+  [/computer|technology/, "laptop", "blue"],
+];
+
+/** Icon and colour for a subject, matched on its name like the design (Polity red, History orange…). */
+export function subjectVisual(name: string, index = 0): { icon: IconName; accent: Accent } {
+  const text = (name || "").toLowerCase();
+  const hit = SUBJECT_ICONS.find(([pattern]) => pattern.test(text));
+  return hit ? { icon: hit[1], accent: hit[2] } : { icon: "book", accent: accentAt(index) };
+}
+
+/** Coloured icon on a soft tinted rounded square (list rows). */
+export function ColorIcon({ icon, accent = "green", size = 44 }: { icon: IconName; accent?: Accent; size?: number }) {
+  const color = ACCENTS[accent];
+  return (
+    <View style={{ width: size, height: size, borderRadius: Math.round(size * 0.3), backgroundColor: `${color}1F`, alignItems: "center", justifyContent: "center" }}>
+      <Ionicons name={icon} size={Math.round(size * 0.5)} color={color} />
+    </View>
+  );
+}
+
+/** Quick-action tile: white card, coloured filled icon, label under it. */
+export function IconTile({ icon, label, onPress, accent = "green" }: { icon: IconName; label: string; onPress: () => void; accent?: Accent }) {
   const { palette } = useTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{ width: "31%", alignItems: "center", marginBottom: 14 }}>
-      <View style={{ width: 54, height: 54, borderRadius: 18, backgroundColor: palette.mint, alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
-        <Ionicons name={icon} size={22} color={palette.primary} />
-      </View>
-      <Text style={{ color: palette.ink, fontSize: 12, fontWeight: "700", textAlign: "center" }}>{label}</Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: "31.5%",
+        alignItems: "center",
+        backgroundColor: palette.surface,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: palette.line,
+        paddingVertical: 14,
+        paddingHorizontal: 4,
+        marginBottom: 10,
+        opacity: pressed ? 0.75 : 1,
+        shadowColor: "#0B3D2E",
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        elevation: 1,
+      })}
+    >
+      <Ionicons name={icon} size={28} color={ACCENTS[accent]} />
+      <Text style={{ color: palette.ink, fontSize: 12, fontWeight: "700", textAlign: "center", marginTop: 6 }} numberOfLines={1}>{label}</Text>
     </Pressable>
   );
 }
@@ -328,7 +423,7 @@ export function Choice({ letter, text, state, onPress, disabled }: { letter: str
   );
 }
 
-export function Dialog({ visible, title, body, confirm, cancel, danger, onConfirm, onCancel }: { visible: boolean; title: string; body: string; confirm: string; cancel?: string; danger?: boolean; onConfirm: () => void; onCancel: () => void }) {
+export function Dialog({ visible, title, body, confirm, cancel, danger, onConfirm, onCancel }: { visible: boolean; title: string; body: string; confirm: string; cancel?: string; danger?: boolean; onConfirm: PressHandler; onCancel: () => void }) {
   const { palette } = useTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
@@ -362,21 +457,50 @@ export function Sheet({ visible, title, onClose, children }: { visible: boolean;
 export function TabBar({ tab, onChange }: { tab: string; onChange: (tab: "home" | "exams" | "practice" | "tutor" | "profile") => void }) {
   const { palette } = useTheme();
   const { t } = useLocale();
+  // Design order: the AI Tutor is the raised round button in the middle.
   const items: Array<{ id: "home" | "exams" | "practice" | "tutor" | "profile"; icon: IconName; label: string }> = [
     { id: "home", icon: "home", label: "Home" },
-    { id: "exams", icon: "library", label: "Exams" },
-    { id: "practice", icon: "create", label: "Practice" },
-    { id: "tutor", icon: "chatbubble-ellipses", label: "AI Tutor" },
+    { id: "exams", icon: "book", label: "Exams" },
+    { id: "tutor", icon: "sparkles", label: "AI Tutor" },
+    { id: "practice", icon: "clipboard", label: "Practice" },
     { id: "profile", icon: "person", label: "Profile" },
   ];
   return (
     <View style={[styles.tabs, { backgroundColor: palette.surface, borderTopColor: palette.line }]}>
       {items.map((item) => {
         const active = tab === item.id;
+        const color = active ? palette.green : palette.muted;
+        if (item.id === "tutor") {
+          return (
+            <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => onChange(item.id)} style={styles.tab}>
+              <View
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 28,
+                  marginTop: -26,
+                  backgroundColor: palette.green,
+                  borderWidth: 4,
+                  borderColor: palette.surface,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  shadowColor: "#16A34A",
+                  shadowOpacity: 0.35,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 4 },
+                  elevation: 6,
+                }}
+              >
+                <Text style={{ color: "#FFFFFF", fontSize: 17, fontWeight: "900" }}>AI</Text>
+              </View>
+              <Text style={{ fontSize: 10, fontWeight: "700", color }}>{t(item.label)}</Text>
+            </Pressable>
+          );
+        }
         return (
-          <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} onPress={() => onChange(item.id)} style={styles.tab}>
-            <Ionicons name={active ? item.icon : `${item.icon}-outline` as IconName} size={21} color={active ? palette.primary : palette.muted} />
-            <Text style={{ fontSize: 10, fontWeight: "700", color: active ? palette.primary : palette.muted }}>{t(item.label)}</Text>
+          <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => onChange(item.id)} style={styles.tab}>
+            <Ionicons name={active ? item.icon : `${item.icon}-outline` as IconName} size={22} color={color} />
+            <Text style={{ fontSize: 10, fontWeight: active ? "800" : "700", color }}>{t(item.label)}</Text>
           </Pressable>
         );
       })}

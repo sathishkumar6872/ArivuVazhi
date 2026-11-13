@@ -4,7 +4,7 @@ import { completeGemini } from "./gemini-settings.js";
 import { config } from "./config.js";
 import { HttpError, nid } from "./http.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "./ai-budget.js";
-import { AiUsage, AppConfig, DailyMockSet, Exam, MockTest, PracticeSession, Question, Subject, Topic, User } from "./models.js";
+import { AiUsage, AppConfig, Exam, PracticeSession, Question, Subject, Topic, User } from "./models.js";
 import { stemKey } from "./governance.js";
 import { getOpenAiSettings } from "./openai-settings.js";
 
@@ -225,7 +225,7 @@ async function pickTopicAnchor(input: {
   return { topic: topics[Math.floor(Math.random() * topics.length)], subject };
 }
 
-const shuffle = <T,>(items: T[]) => {
+export const shuffle = <T,>(items: T[]) => {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -263,7 +263,7 @@ async function seenPracticeIds(studentId: string, examId: string) {
   return sessions.map((session) => session.questionIds);
 }
 
-async function stemsFor(ids: string[], limit: number) {
+export async function stemsFor(ids: string[], limit: number) {
   if (!ids.length) return [];
   const rows = await Question.find({ id: { $in: ids.slice(0, limit) } }).select("stem").lean();
   return rows.map((row) => row.stem);
@@ -273,7 +273,7 @@ async function stemsFor(ids: string[], limit: number) {
  * Generate questions owned by one student. Drops anything whose normalised stem
  * already exists for the exam (or repeats inside the batch).
  */
-async function generateForStudent(input: {
+export async function generateForStudent(input: {
   studentId: string;
   exam: { id: string; name: string; code: string; authority: string; pattern?: { marksPerQuestion?: number | null } | null };
   subject: { id: string; name: string; nameEn?: string | null; nameTa?: string | null };
@@ -493,115 +493,4 @@ function exactScopeWithoutIds(scope: Record<string, unknown>) {
   const copy = { ...scope };
   delete copy.id;
   return copy;
-}
-
-const DAILY_MOCK_MAX_QUESTIONS = Number(process.env.DAILY_MOCK_MAX_QUESTIONS || 25);
-
-/**
- * Generate (or reuse) today's mock question set for one student. Called by the
- * 02:00 IST job; idempotent through the unique (student, mock, day) index.
- */
-export async function generateDailyMockSet(input: { studentId: string; mockId: string; dayKey: string }) {
-  const existing = await DailyMockSet.findOne({ studentId: input.studentId, mockId: input.mockId, dayKey: input.dayKey });
-  if (existing?.status === "ready" || existing?.status === "generating") return existing;
-  const mock = await MockTest.findOne({ id: input.mockId, status: "published" }).lean();
-  if (!mock) throw new HttpError(404, "Mock test not found", "NOT_FOUND");
-  const set =
-    existing ||
-    (await DailyMockSet.create({
-      id: nid(),
-      studentId: input.studentId,
-      mockId: mock.id,
-      examId: mock.examId,
-      dayKey: input.dayKey,
-      status: "generating",
-    }));
-  set.status = "generating";
-  set.error = "";
-  await set.save();
-  try {
-    const [exam, student, subjects, priorSets] = await Promise.all([
-      Exam.findOne({ id: mock.examId, lifecycle: "published" }).lean(),
-      User.findOne({ id: input.studentId }).select("language").lean(),
-      Subject.find({ examId: mock.examId, status: "published" }).sort({ order: 1 }).lean(),
-      DailyMockSet.find({ studentId: input.studentId, examId: mock.examId, status: "ready" }).sort({ createdAt: -1 }).limit(7).lean(),
-    ]);
-    if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
-    if (!subjects.length) throw new HttpError(404, "No published syllabus subjects for this exam.", "SYLLABUS_EMPTY");
-    const language: "en" | "ta" = student?.language === "ta" ? "ta" : "en";
-    const target = Math.min(DAILY_MOCK_MAX_QUESTIONS, Math.max(5, exam.pattern?.totalQuestions || 20));
-    const avoidStems = await stemsFor(priorSets.flatMap((row) => row.questionIds), 30);
-    const perSubject = Math.max(1, Math.ceil(target / subjects.length));
-    const ids: string[] = [];
-    let provider = "";
-    for (const subject of shuffle(subjects)) {
-      if (ids.length >= target) break;
-      const topics = await Topic.find({ examId: mock.examId, subjectId: subject.id, status: "published" }).lean();
-      if (!topics.length) continue;
-      const topic = topics[Math.floor(Math.random() * topics.length)];
-      const result = await generateForStudent({
-        studentId: input.studentId,
-        exam,
-        subject,
-        topic,
-        language,
-        difficulty: "medium",
-        count: Math.min(perSubject, target - ids.length),
-        avoidStems,
-        feature: "daily_mock_generate",
-      });
-      provider = result.provider;
-      ids.push(...result.docs.map((doc) => doc.id));
-    }
-    if (!ids.length) throw new HttpError(502, "AI returned no usable questions.", "AI_EMPTY");
-    set.questionIds = ids;
-    set.status = "ready";
-    set.provider = provider;
-    await set.save();
-    return set;
-  } catch (error) {
-    set.status = "failed";
-    set.error = error instanceof Error ? error.message.slice(0, 300) : "unknown";
-    await set.save();
-    throw error;
-  }
-}
-
-/**
- * Fallback when no daily set was prepared (job missed, new student): use the
- * admin-configured list, else sample unseen-by-design approved questions.
- */
-export async function pickMockQuestionIds(input: {
-  studentId: string;
-  examId: string;
-  configuredIds: string[];
-  targetCount: number;
-}): Promise<string[]> {
-  if (input.configuredIds.length) {
-    const ready = await Question.find({ id: { $in: input.configuredIds }, status: "published" }).select("id").lean();
-    const readySet = new Set(ready.map((question) => question.id));
-    const ordered = input.configuredIds.filter((id) => readySet.has(id));
-    if (ordered.length) return ordered;
-  }
-  const target = Math.max(1, input.targetCount);
-  const pool = await Question.find({ examId: input.examId, status: "published" }).select("id subjectId").lean();
-  if (!pool.length) {
-    throw new HttpError(404, "Today's mock questions are not ready yet. Please try again later.", "NO_QUESTIONS");
-  }
-  // Round-robin across subjects so one subject doesn't dominate.
-  const bySubject = new Map<string, string[]>();
-  for (const question of shuffle(pool)) {
-    const list = bySubject.get(question.subjectId) || [];
-    list.push(question.id);
-    bySubject.set(question.subjectId, list);
-  }
-  const buckets = [...bySubject.values()];
-  const chosen: string[] = [];
-  while (chosen.length < target && buckets.some((bucket) => bucket.length)) {
-    for (const bucket of buckets) {
-      const next = bucket.shift();
-      if (next && chosen.length < target) chosen.push(next);
-    }
-  }
-  return chosen;
 }

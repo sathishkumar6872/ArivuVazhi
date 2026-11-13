@@ -32,7 +32,7 @@ import {
 import { getGeminiSettings, testGeminiConnection } from "../gemini-settings.js";
 import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
-import { dailyMockJobStatus, runDailyMockJob } from "../jobs.js";
+import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
 
 export const adminRouter = Router();
@@ -1119,9 +1119,20 @@ adminRouter.get(
 adminRouter.post(
   "/jobs/daily-mocks",
   wrap(async (req, res) => {
-    void runDailyMockJob("manual").catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
+    const start = await startDailyMockJob("manual");
+    if (!start.started) return res.status(200).json({ data: { started: false, reason: start.reason, runId: start.runId } });
+    void start.done.catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
     await audit(req.user!.id, "job_trigger", "job", "daily_mock_sets");
-    res.status(202).json({ data: { started: true } });
+    res.status(202).json({ data: { started: true, runId: start.runId } });
+  }),
+);
+
+adminRouter.get(
+  "/jobs/daily-mocks/:runId",
+  wrap(async (req, res) => {
+    const run = await getDailyMockRun(req.params.runId);
+    if (!run) throw new HttpError(404, "Job run not found", "NOT_FOUND");
+    res.json({ data: run });
   }),
 );
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { audit, publicUser, requireAuth } from "../auth.js";
 import { dayKey, HttpError, nid, sendList, pageQuery, wrap } from "../http.js";
 import { visibleToStudent } from "../question-ai.js";
+import { prepareStudentMocks } from "../daily-mock.js";
 import {
   AppFeedback,
   Bookmark,
@@ -58,6 +59,13 @@ studentRouter.patch(
   }),
 );
 
+/** Prepare today's daily mock for each of the student's exams without delaying the response. */
+function startMockPreparation(studentId: string) {
+  void prepareStudentMocks(studentId).catch((error) =>
+    console.warn(`Mock preparation for ${studentId} failed: ${error instanceof Error ? error.message : error}`),
+  );
+}
+
 studentRouter.post(
   "/onboarding",
   wrap(async (req, res) => {
@@ -81,15 +89,9 @@ studentRouter.post(
       },
       { new: true },
     ).lean();
-    const today = dayKey();
-    const existing = await PlannerTask.countDocuments({ studentId: owner(req), dueDate: today });
-    if (!existing) {
-      await PlannerTask.insertMany([
-        { id: nid(), studentId: owner(req), examId: exam.id, title: "Read today's syllabus topic", dueDate: today, minutes: 40, status: "pending" },
-        { id: nid(), studentId: owner(req), examId: exam.id, title: "Complete a 10-question practice set", dueDate: today, minutes: 25, status: "pending" },
-        { id: nid(), studentId: owner(req), examId: exam.id, title: "Ask the AI Tutor one doubt", dueDate: today, minutes: 15, status: "pending" },
-      ]);
-    }
+    // No starter planner tasks: a new student's plan starts empty and is theirs to fill.
+    // Build today's mock now (in the background) so a new student need not wait for 02:00.
+    startMockPreparation(owner(req));
     await audit(owner(req), "onboarding_complete", "user", owner(req), { examId: exam.id });
     res.json({ data: publicUser(user as never) });
   }),
@@ -106,6 +108,7 @@ studentRouter.post(
     if (!user.examIds.includes(exam.id)) user.examIds.push(exam.id);
     if (makePrimary) user.primaryExamId = exam.id;
     await user.save();
+    startMockPreparation(owner(req));
     res.json({ data: publicUser(user.toObject() as never) });
   }),
 );

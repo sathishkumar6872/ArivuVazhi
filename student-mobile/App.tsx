@@ -122,7 +122,9 @@ function Shell({ user, setUser, onLogout }: { user: Student; setUser: (user: Stu
       return { ...current, [tab]: stack.slice(0, -1) };
     });
   }
+  /** A tab press always lands on that tab's first screen, not on whatever was opened inside it earlier. */
   function goTab(next: TabName) {
+    setStacks((current) => ({ ...current, [next]: [rootOf(next)] }));
     setTab(next);
   }
 
@@ -158,7 +160,7 @@ function Shell({ user, setUser, onLogout }: { user: Student; setUser: (user: Stu
         {route.name === "support" && <SupportScreen back={back} />}
       </View>
       {!hideTabBar ? (
-        <TabBar tab={tab} onChange={(next) => { if (!stacks[next].length) setStacks((current) => ({ ...current, [next]: [rootOf(next)] })); goTab(next); }} />
+        <TabBar tab={tab} onChange={goTab} />
       ) : null}
     </View>
   );
