@@ -119,6 +119,13 @@ function normalizeOptions(item: GeneratedMcq): GeneratedMcq {
   };
 }
 
+/** What each level means, so the model makes easy, medium and hard genuinely different. */
+const DIFFICULTY_RUBRIC: Record<"easy" | "medium" | "hard", string> = {
+  easy: "direct recall of one well-known fact (a name, article, date or definition); one short sentence; distractors clearly different.",
+  medium: "understanding or applying a concept, or linking two facts; distractors are plausible and from the same area.",
+  hard: "multi-step reasoning or statement-based items (e.g. \"Which of the statements are correct? 1, 2, 3\" with answers like \"1 and 3 only\"), less-known specifics, or match-the-following; distractors are close and need careful elimination.",
+};
+
 export async function generateMcqBundle(input: {
   examName: string;
   examCode: string;
@@ -138,6 +145,7 @@ export async function generateMcqBundle(input: {
     throw new HttpError(503, "Enable ChatGPT or Gemini in AI providers to generate practice questions.", "AI_UNAVAILABLE");
   }
   const count = Math.min(25, Math.max(1, input.count));
+  const levelLine = DIFFICULTY_RUBRIC[input.difficulty];
   const languageLine =
     input.language === "ta"
       ? "Write every stem, option, and explanation in Tamil script (தமிழ்)."
@@ -148,11 +156,12 @@ Create original MCQs — never copy copyrighted PYQ wording verbatim.
 Each question must have exactly 4 options with keys A,B,C,D and one correctKey.
 Explanations must briefly say why the correct option is right.
 Stay inside the given exam syllabus topic. Prefer factual, checkable items.
+Every question in this request must be at the "${input.difficulty}" level: ${levelLine}
 ${languageLine}`;
   const user = `Exam: ${input.examName} (${input.examCode}) · Authority: ${input.authority}
 Subject: ${input.subjectName}
 Topic: ${input.topicName}
-Difficulty: ${input.difficulty}
+Difficulty: ${input.difficulty} — ${levelLine}
 Count: ${count}
 ${
   input.avoidStems?.length
@@ -315,7 +324,8 @@ export async function generateForStudent(input: {
       options: item.options,
       correctKey: item.correctKey,
       explanation: item.explanation,
-      difficulty: item.difficulty || input.difficulty,
+      // The requested level, so the question lands in the pool the student chose (the model's own label can drift).
+      difficulty: input.difficulty,
       language: input.language,
       source: "student_ai",
       ownerStudentId: input.studentId,
@@ -355,7 +365,7 @@ function prefetchPractice(input: {
   language: "en" | "ta";
   count: number;
 }) {
-  const key = `${input.studentId}:${input.examId}:${input.topicId || "*"}:${input.language}`;
+  const key = `${input.studentId}:${input.examId}:${input.topicId || "*"}:${input.language}:${input.difficulty || "*"}`;
   if (prefetching.has(key)) return;
   prefetching.add(key);
   void (async () => {
@@ -368,6 +378,8 @@ function prefetchPractice(input: {
         language: input.language,
         id: { $nin: seen },
         ...(input.topicId ? { topicId: input.topicId } : {}),
+        // Count only questions at the chosen level; other levels don't help the next set.
+        ...(input.difficulty ? { difficulty: input.difficulty } : {}),
       });
       // Keep two sets ahead so the next starts never wait on the AI.
       if (ready >= input.count * 2) return;
@@ -452,7 +464,9 @@ export async function ensurePracticeQuestions(input: {
         topic: anchor.topic,
         language,
         difficulty: input.difficulty || "medium",
-        count: count - picked.length,
+        // A couple extra: duplicates dropped by the stem filter must not leave the set short
+        // (difficulty is never relaxed to fill it). Unused extras stay in the student's pool.
+        count: count - picked.length + 2,
         avoidStems: await stemsFor(seenLists.flat(), 30),
         feature: "practice_generate",
       });
@@ -463,16 +477,16 @@ export async function ensurePracticeQuestions(input: {
       console.warn(`Live practice generation failed: ${error instanceof Error ? error.message : "unknown"}`);
     }
   }
-  // AI unavailable: relax difficulty/language but still only unseen questions.
-  if (picked.length < count) take(await sample({ ...scope, id: { $nin: [...seen] } }, count - picked.length));
+  // AI unavailable: the chosen difficulty and language are never relaxed — a "hard"
+  // practice must not quietly serve easy questions, nor Tamil students English ones.
 
-  // Last resort: repeat the questions seen longest ago rather than return nothing.
+  // Last resort: repeat the questions seen longest ago (same difficulty and language) rather than return nothing.
   let repeated = 0;
   if (picked.length < count) {
     const oldestFirst = [...seenLists].reverse().flat();
     const pickedIds = new Set(picked.map((question) => question.id));
     const candidates = oldestFirst.filter((id, index) => !pickedIds.has(id) && oldestFirst.indexOf(id) === index);
-    const rows = await Question.find({ id: { $in: candidates }, ...exactScopeWithoutIds(scope) }).lean<BankQuestion[]>();
+    const rows = await Question.find({ id: { $in: candidates }, ...exactScopeWithoutIds(exact) }).lean<BankQuestion[]>();
     const byId = new Map(rows.map((row) => [row.id, row]));
     for (const id of candidates) {
       const row = byId.get(id);
@@ -483,7 +497,11 @@ export async function ensurePracticeQuestions(input: {
   }
 
   if (!picked.length) {
-    throw new HttpError(404, "No questions could be prepared for this selection. Try another topic or try again shortly.", "NO_QUESTIONS");
+    throw new HttpError(
+      404,
+      `No ${input.difficulty ? `${input.difficulty} ` : ""}questions could be prepared for this selection right now. Try again shortly or pick another difficulty or topic.`,
+      "NO_QUESTIONS",
+    );
   }
   prefetchPractice({ studentId: input.studentId, examId: input.examId, topicId: input.topicId, difficulty: input.difficulty, language, count });
   return { questions: shuffle(picked), generatedLive, repeated };
