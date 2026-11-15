@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, type Student } from "./api";
 import type { Route } from "./nav";
 import { useTheme } from "./theme";
-import { Banner, Button, Card, Choice, ColorIcon, Dialog, Empty, Header, Loading, Pill, Progress, ScoreRing, Screen, Segment, Sheet, accentAt, subjectVisual } from "./ui";
+import { Banner, Button, Card, Choice, ColorIcon, Dialog, Empty, FRESH_LEVEL, Header, LevelSteps, Loading, Pill, Progress, ScoreRing, Screen, Segment, Sheet, accentAt, subjectVisual, type Level } from "./ui";
 
 export function ExamsScreen({ user, go }: { user: Student; go: (route: Route) => void }) {
   const { palette } = useTheme();
@@ -60,8 +60,9 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
 
   const subjects = exam?.subjects || [];
   const topicCount = subjects.reduce((sum: number, subject: any) => sum + (subject.topics?.length || 0), 0);
+  // Level progress: each topic counts Easy/Medium/Hard passed as thirds.
   const studiedTopics = subjects.reduce(
-    (sum: number, subject: any) => sum + (subject.topics || []).filter((topic: any) => topic.studied).length,
+    (sum: number, subject: any) => sum + (subject.topics || []).reduce((acc: number, topic: any) => acc + (topic.level?.percent || 0) / 100, 0),
     0,
   );
   const syllabusPercent = topicCount ? Math.round((studiedTopics / topicCount) * 100) : 0;
@@ -118,7 +119,7 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
           <Button
             label="Start practice"
             icon="play"
-            onPress={() => go({ name: "quiz", examId: exam.id, title: `${exam.name} practice`, difficulty: "medium" })}
+            onPress={() => go({ name: "quiz", examId: exam.id, title: `${exam.name} practice`, difficulty: "easy" })}
           />
           <Button label="Open syllabus" tone="ghost" onPress={() => setTab("Syllabus")} />
           <Button label="Daily mock" tone="ghost" onPress={() => go({ name: "mocks" })} />
@@ -130,8 +131,8 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
           subjects.map((subject: any, subjectIndex: number) => {
             const visual = subjectVisual(subject.name, subjectIndex);
             const total = subject.topics?.length || 0;
-            const studied = (subject.topics || []).filter((topic: any) => topic.studied).length;
-            const percent = total ? Math.round((studied / total) * 100) : 0;
+            const studied = (subject.topics || []).filter((topic: any) => topic.level?.mastered).length;
+            const percent = subjectPercent(subject);
             return (
               <Card
                 key={subject.id}
@@ -149,7 +150,7 @@ export function ExamScreen({ examId, user, onUser, back, go }: { examId: string;
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: palette.ink, fontWeight: "800" }}>{subject.name}</Text>
                     <Text style={{ color: palette.muted, marginTop: 4 }}>
-                      {total} topics · {studied} studied
+                      {total} topics · {studied} mastered
                     </Text>
                     {total > 0 ? <Progress value={percent} /> : null}
                   </View>
@@ -378,15 +379,56 @@ export function PyqPaperScreen({ paperId, back }: { paperId: string; back: () =>
   );
 }
 
+/** Average Easy → Medium → Hard progress of a subject's topics (0–100). */
+function subjectPercent(subject: any) {
+  const topics = subject?.topics || [];
+  if (!topics.length) return 0;
+  return Math.round(topics.reduce((sum: number, topic: any) => sum + (topic.level?.percent || 0), 0) / topics.length);
+}
+
+/** Levels open in at least one topic (Quick practice uses only those topics). */
+function openLevels(subjects: any[]): Record<Level, boolean> {
+  const topics = subjects.flatMap((subject: any) => subject.topics || []);
+  return {
+    easy: true,
+    medium: topics.some((topic: any) => topic.level?.levels?.medium?.unlocked),
+    hard: topics.some((topic: any) => topic.level?.levels?.hard?.unlocked),
+  };
+}
+
+const LEVEL_NAME: Record<Level, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
+const STATUS_LABEL: Record<string, string> = { completed: "Completed", abandoned: "Left midway", active: "In progress" };
+
+/** One topic row: name, level chips and overall level progress. Tapping the row practises the current level. */
+function TopicLevelCard({ topic, subtitle, onStart }: { topic: any; subtitle?: string; onStart: (level: Level) => void }) {
+  const { palette } = useTheme();
+  const level = topic.level || FRESH_LEVEL;
+  return (
+    <Card onPress={() => onStart(level.current)}>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: palette.ink, fontWeight: "800" }}>{topic.name}</Text>
+          <Text style={{ color: palette.muted, fontSize: 12, marginTop: 2 }}>
+            {subtitle ? `${subtitle} · ` : ""}{level.mastered ? "Mastered" : `Next: ${LEVEL_NAME[level.current as Level]}`}
+          </Text>
+        </View>
+        <Text style={{ color: palette.green, fontWeight: "800" }}>{level.percent}%</Text>
+      </View>
+      <LevelSteps level={level} onPick={onStart} />
+    </Card>
+  );
+}
+
 export function PracticeScreen({ user, go }: { user: Student; go: (route: Route) => void }) {
   const { palette } = useTheme();
   const [exam, setExam] = useState<any>(null);
   const [marks, setMarks] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
+  const [resume, setResume] = useState<any>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(user.primaryExamId));
   const [tab, setTab] = useState("Subjects");
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
+  const [difficulty, setDifficulty] = useState<Level>("easy");
   useEffect(() => {
     if (!user.primaryExamId) {
       setExam(null);
@@ -399,12 +441,14 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
       api(`/exams/${user.primaryExamId}`),
       api<any[]>("/bookmarks").catch(() => []),
       api<any[]>("/practice/history").catch(() => []),
+      api<any>(`/practice/active?examId=${user.primaryExamId}`).catch(() => null),
     ])
-      .then(([nextExam, nextMarks, nextHistory]) => {
+      .then(([nextExam, nextMarks, nextHistory, nextResume]) => {
         if (!alive) return;
         setExam(nextExam);
         setMarks(nextMarks);
         setHistory(nextHistory);
+        setResume(nextResume);
         setError("");
       })
       .catch((err) => {
@@ -420,31 +464,50 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
   }, [user.primaryExamId]);
   const subjects = exam?.subjects || [];
   const topics = subjects.flatMap((subject: any) => (subject.topics || []).map((topic: any) => ({ ...topic, subjectName: subject.name })));
+  const open = openLevels(subjects);
+  const startTopic = (topic: any, level: Level) => go({ name: "quiz", examId: user.primaryExamId, topicId: topic.id, title: topic.name, difficulty: level });
   return (
     <Screen>
       <Header title="Practice" subtitle={exam?.name || "Primary exam"} />
+      {resume ? (
+        <Card onPress={() => go({ name: "quiz", examId: resume.examId, topicId: resume.topicId || undefined, title: resume.topicName || "Practice", difficulty: resume.difficulty || undefined, sessionId: resume.id })} style={{ backgroundColor: palette.greenSoft, borderColor: palette.green }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Ionicons name="play-circle" size={30} color={palette.green} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: palette.primary, fontWeight: "800" }}>Continue practice</Text>
+              <Text style={{ color: palette.muted, marginTop: 2 }}>
+                {resume.topicName || "Quick practice"}{resume.difficulty ? ` · ${LEVEL_NAME[resume.difficulty as Level]}` : ""} · {resume.answered} of {resume.total} done
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.muted} />
+          </View>
+        </Card>
+      ) : null}
       <Segment options={["Subjects", "Topics", "Saved", "History"]} value={tab} onChange={setTab} />
       {error ? <Banner message={error} /> : null}
       {loading ? <Loading label="Loading practice…" /> : null}
       {!loading && !user.primaryExamId && (
-        <Empty title="Choose an exam" body="Open Exams tab, pick an exam, then Set as current exam." />
+        <Empty title="Choose an exam" body="Open the Exams tab, pick an exam, then set it as your current exam." />
       )}
-      {!loading && user.primaryExamId && (tab === "Subjects" || tab === "Topics") && (
-        <View>
-          <Text style={{ color: palette.muted, fontWeight: "700", marginBottom: 6 }}>Difficulty</Text>
-          <Segment options={["easy", "medium", "hard"]} value={difficulty} onChange={(value) => setDifficulty(value as typeof difficulty)} />
-          {tab === "Subjects" ? (
+      {!loading && user.primaryExamId && tab === "Subjects" && (
+        <View style={{ marginBottom: 14 }}>
+          <Text style={{ color: palette.muted, fontWeight: "700", marginBottom: 6 }}>Quick practice level</Text>
+          <Segment options={["easy", "medium", "hard"]} value={difficulty} onChange={(value) => setDifficulty(value as Level)} />
+          {open[difficulty] ? (
             <Button
-              label="Quick 5 questions"
-              onPress={() => go({ name: "quiz", examId: user.primaryExamId, title: "Quick practice", difficulty })}
+              label={`Quick 5 · ${LEVEL_NAME[difficulty]}`}
+              icon="flash"
+              onPress={() => go({ name: "quiz", examId: user.primaryExamId, title: `Quick practice · ${LEVEL_NAME[difficulty]}`, difficulty })}
             />
-          ) : null}
+          ) : (
+            <Banner tone="info" message={`${LEVEL_NAME[difficulty]} unlocks topic by topic: score ${difficulty === "medium" ? "80% in Easy" : "70% in Medium"} (10+ questions) on a topic first.`} />
+          )}
         </View>
       )}
       {!loading && tab === "Subjects" && user.primaryExamId && subjects.map((subject: any, subjectIndex: number) => {
         const rows = subject.topics || [];
-        const studied = rows.filter((topic: any) => topic.studied).length;
-        const percent = rows.length ? Math.round((studied / rows.length) * 100) : 0;
+        const percent = subjectPercent(subject);
+        const mastered = rows.filter((topic: any) => topic.level?.mastered).length;
         const visual = subjectVisual(subject.name, subjectIndex);
         return (
           <Card key={subject.id} onPress={() => go({ name: "topics", subjectId: subject.id, subjectName: subject.name, examId: user.primaryExamId })}>
@@ -456,7 +519,7 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
                   <Text style={{ color: palette.green, fontWeight: "800" }}>{percent}%</Text>
                 </View>
                 <Progress value={percent} />
-                <Text style={{ color: palette.muted }}>{rows.length} topics</Text>
+                <Text style={{ color: palette.muted }}>{rows.length} {rows.length === 1 ? "topic" : "topics"} · {mastered} mastered</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={palette.muted} />
             </View>
@@ -464,29 +527,41 @@ export function PracticeScreen({ user, go }: { user: Student; go: (route: Route)
         );
       })}
       {!loading && tab === "Subjects" && user.primaryExamId && exam && !subjects.length && (
-        <Empty title="No syllabus yet" body="Admin must discover subjects for your current exam before practice by subject works. Quick 5 still needs published questions." />
+        <Empty title="No syllabus yet" body="Subjects for your exam are being prepared. Please check back soon." />
       )}
       {!loading && tab === "Topics" && topics.map((topic: any) => (
-        <Card key={topic.id} onPress={() => go({ name: "quiz", examId: user.primaryExamId, topicId: topic.id, title: topic.name, difficulty })}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-            <Text style={{ color: palette.ink, fontWeight: "700", flex: 1 }}>{topic.name}</Text>
-            <Text style={{ color: palette.green, fontWeight: "800" }}>{topic.accuracy || 0}%</Text>
-          </View>
-          <Text style={{ color: palette.muted }}>{topic.subjectName} · {topic.attempted || 0} attempted</Text>
-          <Progress value={topic.accuracy || 0} />
-        </Card>
+        <TopicLevelCard key={topic.id} topic={topic} subtitle={topic.subjectName} onStart={(level) => startTopic(topic, level)} />
       ))}
       {!loading && tab === "Topics" && user.primaryExamId && exam && !topics.length && (
-        <Empty title="No topics yet" body="Update subject topics in admin syllabus, then come back here." />
+        <Empty title="No topics yet" body="Topics for your exam are being prepared. Please check back soon." />
       )}
       {!loading && tab === "Saved" && marks.map((question) => (
         <Card key={question.id}><Text style={{ color: palette.ink, fontWeight: "700" }}>{question.stem}</Text></Card>
       ))}
       {!loading && tab === "Saved" && !marks.length && <Empty title="No bookmarks" body="Save a question after you check the answer." />}
       {!loading && tab === "History" && history.map((session) => (
-        <Card key={session.id}>
-          <Text style={{ color: palette.ink, fontWeight: "800" }}>{session.correct}/{session.total} correct</Text>
-          <Text style={{ color: palette.muted }}>{session.difficulty || "Mixed"} · {session.status}</Text>
+        <Card
+          key={session.id}
+          onPress={session.answered ? () => go({
+            name: "practiceResult",
+            sessionId: session.id,
+            examId: session.examId,
+            topicId: session.topicId || undefined,
+            title: session.topicName || "Quick practice",
+            difficulty: session.difficulty || undefined,
+            kind: session.kind,
+            correct: session.correct,
+            answered: session.answered,
+            total: session.total,
+          }) : undefined}
+        >
+          <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+            <Text style={{ color: palette.ink, fontWeight: "800", flex: 1 }}>{session.topicName || "Quick practice"}</Text>
+            <Text style={{ color: palette.green, fontWeight: "800" }}>{session.correct}/{session.answered}</Text>
+          </View>
+          <Text style={{ color: palette.muted, marginTop: 2 }}>
+            {session.kind === "retry" ? "Retry · " : ""}{session.difficulty ? LEVEL_NAME[session.difficulty as Level] : "Mixed"} · {STATUS_LABEL[session.status] || session.status} · {session.answered} of {session.total} answered
+          </Text>
         </Card>
       ))}
       {!loading && tab === "History" && !history.length && <Empty title="No practice history" body="Complete a practice set to see it here." />}
@@ -498,7 +573,6 @@ export function TopicsScreen({ route, back, go }: { route: Extract<Route, { name
   const { palette } = useTheme();
   const [exam, setExam] = useState<any>(null);
   const [error, setError] = useState("");
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   useEffect(() => {
     api(`/exams/${route.examId}`)
       .then(setExam)
@@ -508,41 +582,52 @@ export function TopicsScreen({ route, back, go }: { route: Extract<Route, { name
   const topicRows = subject?.topics || [];
   return (
     <Screen>
-      <Header title={route.subjectName} onBack={back} />
+      <Header title={route.subjectName} subtitle={subject ? `${subjectPercent(subject)}% · Easy → Medium → Hard` : undefined} onBack={back} />
       {error ? <Banner message={error} /> : null}
       {!exam && !error ? <Loading /> : null}
-      {exam && (
-        <View style={{ marginBottom: 8 }}>
-          <Text style={{ color: palette.muted, fontWeight: "700", marginBottom: 6 }}>Difficulty</Text>
-          <Segment options={["easy", "medium", "hard"]} value={difficulty} onChange={(value) => setDifficulty(value as typeof difficulty)} />
-        </View>
-      )}
+      {exam && topicRows.length ? (
+        <Text style={{ color: palette.muted, marginBottom: 8, lineHeight: 18 }}>
+          Each topic opens level by level: 80% in Easy unlocks Medium, 70% in Medium unlocks Hard, 60% in Hard masters it (10+ questions each).
+        </Text>
+      ) : null}
       {topicRows.map((topic: any) => (
-        <Card
+        <TopicLevelCard
           key={topic.id}
-          onPress={() =>
-            go({
-              name: "quiz",
-              examId: route.examId,
-              topicId: topic.id,
-              title: topic.name,
-              difficulty,
-            })
-          }
-        >
-          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-            <Text style={{ color: palette.ink, fontWeight: "700", flex: 1 }}>{topic.name}</Text>
-            <Text style={{ color: palette.green, fontWeight: "700" }}>{topic.accuracy || 0}%</Text>
-          </View>
-          <Progress value={topic.accuracy || 0} />
-          <Text style={{ color: palette.muted }}>{topic.attempted || 0} attempted</Text>
-        </Card>
+          topic={topic}
+          onStart={(level) => go({ name: "quiz", examId: route.examId, topicId: topic.id, title: topic.name, difficulty: level })}
+        />
       ))}
       {exam && subject && !topicRows.length && (
-        <Empty title="No topics" body="This subject has no topics yet. Admin can Update topics for it." />
+        <Empty title="No topics" body="Topics for this subject are being prepared. Please check back soon." />
       )}
       {exam && !subject && <Empty title="Subject missing" body="This subject is not in the current syllabus." />}
     </Screen>
+  );
+}
+
+/** Lets a student flag a wrong or unclear question; 3 reports hide it until an admin reviews it. */
+function ReportQuestion({ questionId }: { questionId: string }) {
+  const { palette } = useTheme();
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState(false);
+  if (done) return <Text style={{ color: palette.muted, textAlign: "center", marginVertical: 8 }}>Thanks — reported for review.</Text>;
+  if (!open) {
+    return (
+      <Pressable accessibilityRole="button" accessibilityLabel="Report this question" onPress={() => setOpen(true)} style={{ alignSelf: "center", padding: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Ionicons name="flag-outline" size={14} color={palette.muted} />
+        <Text style={{ color: palette.muted, fontWeight: "700" }}>Report a problem</Text>
+      </Pressable>
+    );
+  }
+  const send = async (reason: "wrong_answer" | "unclear") => {
+    await api(`/questions/${questionId}/report`, { method: "POST", body: JSON.stringify({ reason }) });
+    setDone(true);
+  };
+  return (
+    <View style={{ flexDirection: "row", gap: 8, marginVertical: 4 }}>
+      <View style={{ flex: 1 }}><Button label="Answer is wrong" tone="ghost" onPress={() => send("wrong_answer")} /></View>
+      <View style={{ flex: 1 }}><Button label="Question unclear" tone="ghost" onPress={() => send("unclear")} /></View>
+    </View>
   );
 }
 
@@ -554,7 +639,9 @@ export function QuizScreen({ route, back, onDone }: { route: Extract<Route, { na
   const [feedbackByQuestion, setFeedbackByQuestion] = useState<Record<string, any>>({});
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const [attempt, setAttempt] = useState(0);
+  const [kind, setKind] = useState<"practice" | "retry">(route.retryOf ? "retry" : "practice");
   useEffect(() => {
     setSessionId("");
     setQuestions([]);
@@ -562,22 +649,31 @@ export function QuizScreen({ route, back, onDone }: { route: Extract<Route, { na
     setFeedbackByQuestion({});
     setElapsed(0);
     setError("");
-    setSaved(false);
-    api<any>("/practice/sessions", {
-      method: "POST",
-      body: JSON.stringify({
-        examId: route.examId,
-        topicId: route.topicId,
-        difficulty: route.difficulty,
-        count: 5,
-      }),
-    })
+    setSaved({});
+    const load = route.sessionId
+      ? // Resume: answered questions come back with their result; continue at the first unanswered.
+        api<any>(`/practice/sessions/${route.sessionId}`).then((session) => {
+          const answered: Record<string, any> = {};
+          for (const question of session.questions) {
+            if (question.yourAnswer) answered[question.id] = { selectedKey: question.yourAnswer, correct: question.correct, correctKey: question.correctKey, explanation: question.explanation };
+          }
+          setFeedbackByQuestion(answered);
+          const firstOpen = session.questions.findIndex((question: any) => !question.yourAnswer);
+          setIndex(firstOpen < 0 ? Math.max(0, session.questions.length - 1) : firstOpen);
+          setKind(session.kind || "practice");
+          return session;
+        })
+      : api<any>("/practice/sessions", {
+          method: "POST",
+          body: JSON.stringify({ examId: route.examId, topicId: route.topicId, difficulty: route.difficulty, retryOf: route.retryOf, count: 5 }),
+        });
+    load
       .then((session) => {
         setSessionId(session.id);
         setQuestions(session.questions);
       })
       .catch((err) => setError(err.message));
-  }, [route.examId, route.topicId, route.difficulty]);
+  }, [route.examId, route.topicId, route.difficulty, route.sessionId, route.retryOf, attempt]);
   const question = questions[index];
   const feedback = question ? feedbackByQuestion[question.id] : null;
   useEffect(() => {
@@ -587,39 +683,50 @@ export function QuizScreen({ route, back, onDone }: { route: Extract<Route, { na
   async function answer(key: string) {
     if (feedback) return;
     try {
+      // The server keeps the first answer; a repeat returns that original result.
       const checked = await api(`/practice/sessions/${sessionId}/answers`, { method: "POST", body: JSON.stringify({ questionId: question.id, selectedKey: key }) });
       setFeedbackByQuestion((current) => ({ ...current, [question.id]: checked }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not check");
     }
-    catch (err) { setError(err instanceof Error ? err.message : "Could not check"); }
   }
   async function next() {
     if (index + 1 >= questions.length) {
       const result = await api<any>(`/practice/sessions/${sessionId}/complete`, { method: "POST" });
       onDone({
         name: "practiceResult",
+        sessionId,
+        examId: route.examId,
+        topicId: route.topicId,
+        title: route.title,
+        difficulty: route.difficulty,
+        kind,
         correct: result.correct || 0,
         answered: result.answered || Object.keys(feedbackByQuestion).length,
         total: result.total || questions.length,
+        topics: result.topics || [],
         pendingOffline: Boolean(result.pendingOffline),
       });
       return;
     }
-    setSaved(false);
     setIndex(index + 1);
   }
+  const subtitle = [kind === "retry" ? "Retry wrong answers" : route.difficulty ? LEVEL_NAME[route.difficulty] : "", question ? `${index + 1} of ${questions.length}` : ""].filter(Boolean).join(" · ");
   return (
     <Screen>
-      <Header title={route.title} subtitle={question ? `${index + 1} of ${questions.length}` : ""} onBack={back} />
-      {error ? <Banner message={error} /> : null}
-      {!question && !error ? <Loading variant="quiz" label="Generating practice questions…" /> : null}
+      <Header title={route.title} subtitle={subtitle} onBack={back} />
+      {!question && !error ? <Loading variant="quiz" label="Preparing your questions…" /> : null}
       {error && !question ? (
-        <Empty
-          title="Could not start practice"
-          body={error.includes("AI") || error.includes("Gemini") || error.includes("ChatGPT")
-            ? "Admin must enable ChatGPT or Gemini, and syllabus subjects/topics must exist."
-            : error}
-        />
+        <View>
+          <Empty title={/unlock/i.test(error) ? "Level locked" : "Could not start practice"} body={error} />
+          {/unlock/i.test(error) ? (
+            <Button label="Back" tone="ghost" onPress={back} />
+          ) : (
+            <Button label="Try again" icon="refresh" onPress={() => setAttempt((value) => value + 1)} />
+          )}
+        </View>
       ) : null}
+      {error && question ? <Banner message={error} /> : null}
       {question && (
         <View>
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
@@ -643,33 +750,117 @@ export function QuizScreen({ route, back, onDone }: { route: Extract<Route, { na
             </Card>
           )}
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <View style={{ flex: 1 }}><Button label="Previous" tone="ghost" disabled={index === 0} onPress={() => { setSaved(false); setIndex(index - 1); }} /></View>
+            <View style={{ flex: 1 }}><Button label="Previous" tone="ghost" disabled={index === 0} onPress={() => setIndex(index - 1)} /></View>
             <View style={{ flex: 1 }}><Button label={index + 1 >= questions.length ? "See result" : "Next"} disabled={!feedback} onPress={next} /></View>
           </View>
-          {feedback && <Button label={saved ? "Saved" : "Bookmark"} tone="ghost" disabled={saved} onPress={async () => { await api("/bookmarks", { method: "POST", body: JSON.stringify({ questionId: question.id }) }); setSaved(true); }} />}
+          {feedback && (
+            <Button
+              label={saved[question.id] ? "Saved" : "Bookmark"}
+              tone="ghost"
+              icon={saved[question.id] ? "bookmark" : "bookmark-outline"}
+              disabled={saved[question.id]}
+              onPress={async () => {
+                await api("/bookmarks", { method: "POST", body: JSON.stringify({ questionId: question.id }) });
+                setSaved((current) => ({ ...current, [question.id]: true }));
+              }}
+            />
+          )}
+          {feedback && !feedback.pendingOffline ? <ReportQuestion key={question.id} questionId={question.id} /> : null}
         </View>
       )}
     </Screen>
   );
 }
 
-export function PracticeResultScreen({ route, back }: { route: Extract<Route, { name: "practiceResult" }>; back: () => void }) {
+export function PracticeResultScreen({ route, back, go }: { route: Extract<Route, { name: "practiceResult" }>; back: () => void; go: (route: Route) => void }) {
   const { palette } = useTheme();
-  const accuracy = route.total ? Math.round((route.correct / route.total) * 100) : 0;
+  const [review, setReview] = useState<any>(null);
+  const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (route.pendingOffline) return;
+    api<any>(`/practice/sessions/${route.sessionId}`).then(setReview).catch((err) => setError(err.message));
+  }, [route.sessionId, route.pendingOffline]);
+  const answered = review?.answered ?? route.answered;
+  const correct = review?.correct ?? route.correct;
+  const accuracy = answered ? Math.round((correct / answered) * 100) : 0;
+  const wrong = answered - correct;
+  const isRetry = (review?.kind || route.kind) === "retry";
+  const topics = route.topics || [];
   return (
     <Screen>
-      <Header title="Practice result" onBack={back} />
+      <Header title="Practice result" subtitle={route.title} onBack={back} />
       <Card>
-        <Text style={{ color: palette.muted }}>Score</Text>
+        <Text style={{ color: palette.muted }}>{isRetry ? "Retry score" : "Score"}</Text>
         {route.pendingOffline ? (
           <Text style={{ color: palette.ink, fontSize: 22, fontWeight: "700", marginTop: 6 }}>Saved for sync</Text>
         ) : (
-          <Text style={{ color: palette.ink, fontSize: 36, fontWeight: "700" }}>{route.correct} / {route.total}</Text>
+          <Text style={{ color: palette.ink, fontSize: 36, fontWeight: "700" }}>{correct} / {answered}</Text>
         )}
-        <Text style={{ color: palette.muted }}>{route.answered} answered{route.pendingOffline ? " · score after reconnect" : ` · ${accuracy}% accuracy`}</Text>
+        <Text style={{ color: palette.muted }}>
+          {route.pendingOffline ? "Score after reconnect" : `${accuracy}% accuracy${route.difficulty ? ` · ${LEVEL_NAME[route.difficulty]}` : ""}${isRetry ? " · not counted in progress" : ""}`}
+        </Text>
         {!route.pendingOffline && <Progress value={accuracy} />}
       </Card>
-      <Button label="Back to practice" onPress={back} />
+
+      {topics.map((topic: any) => (
+        <Card key={topic.topicId}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+            <Text style={{ color: palette.ink, fontWeight: "800", flex: 1 }}>{topic.name || "Topic"}</Text>
+            <Text style={{ color: palette.green, fontWeight: "800" }}>{topic.mastered ? "Mastered" : `Next: ${LEVEL_NAME[topic.current as Level]}`}</Text>
+          </View>
+          <LevelSteps level={topic} onPick={(level) => go({ name: "quiz", examId: route.examId, topicId: topic.topicId, title: topic.name || route.title, difficulty: level })} />
+        </Card>
+      ))}
+
+      {review?.weakTopic ? (
+        <Banner tone="info" message={`Weak area: ${review.weakTopic.name}. Practise it again to strengthen it.`} />
+      ) : null}
+
+      <View style={{ gap: 8, marginBottom: 12 }}>
+        {!isRetry && !route.pendingOffline ? (
+          <Button
+            label="Next 5 questions"
+            icon="arrow-forward"
+            onPress={() => go({ name: "quiz", examId: route.examId, topicId: route.topicId, title: route.title, difficulty: route.difficulty })}
+          />
+        ) : null}
+        {!isRetry && wrong > 0 && !route.pendingOffline ? (
+          <Button label={`Retry wrong answers (${wrong})`} tone="ghost" icon="refresh" onPress={() => go({ name: "quiz", examId: route.examId, title: `${route.title} · retry`, retryOf: route.sessionId })} />
+        ) : null}
+        <Button label="Back to practice" tone="ghost" onPress={back} />
+      </View>
+
+      {error ? <Banner message={error} /> : null}
+      {review ? <Text style={{ color: palette.primary, fontSize: 17, fontWeight: "800", marginBottom: 8 }}>Review answers</Text> : null}
+      {(review?.questions || []).filter((question: any) => question.yourAnswer).map((question: any, at: number) => {
+        const yours = question.options.find((option: any) => option.key === question.yourAnswer);
+        const right = question.options.find((option: any) => option.key === question.correctKey);
+        return (
+          <Card key={question.id} style={{ borderColor: question.correct ? palette.good : palette.danger }}>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Ionicons name={question.correct ? "checkmark-circle" : "close-circle"} size={20} color={question.correct ? palette.good : palette.danger} />
+              <Text style={{ color: palette.ink, fontWeight: "700", flex: 1, lineHeight: 20 }}>{at + 1}. {question.stem}</Text>
+            </View>
+            {!question.correct ? (
+              <Text style={{ color: palette.danger, marginTop: 6 }}>Your answer: {question.yourAnswer}. {yours?.text || ""}</Text>
+            ) : null}
+            <Text style={{ color: palette.good, marginTop: 4, fontWeight: "700" }}>Correct: {question.correctKey}. {right?.text || ""}</Text>
+            {question.explanation ? <Text style={{ color: palette.muted, marginTop: 6, lineHeight: 19 }}>{question.explanation}</Text> : null}
+            <Button
+              label={saved[question.id] ? "Saved" : "Bookmark"}
+              tone="ghost"
+              icon={saved[question.id] ? "bookmark" : "bookmark-outline"}
+              disabled={saved[question.id]}
+              onPress={async () => {
+                await api("/bookmarks", { method: "POST", body: JSON.stringify({ questionId: question.id }) });
+                setSaved((current) => ({ ...current, [question.id]: true }));
+              }}
+            />
+            <ReportQuestion questionId={question.id} />
+          </Card>
+        );
+      })}
     </Screen>
   );
 }

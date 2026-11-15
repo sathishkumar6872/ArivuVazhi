@@ -3,6 +3,7 @@ import { z } from "zod";
 import { audit, publicUser, requireAuth } from "../auth.js";
 import { dayKey, HttpError, nid, sendList, pageQuery, wrap } from "../http.js";
 import { visibleToStudent } from "../question-ai.js";
+import { levelsByTopic, NO_PROGRESS, practiceAnswers, topicProgress } from "../practice-progress.js";
 import { prepareStudentMocks } from "../daily-mock.js";
 import {
   AppFeedback,
@@ -135,26 +136,18 @@ studentRouter.get(
     const exam = await Exam.findOne({ id: req.params.id, lifecycle: "published" }).lean();
     if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
     const language = (req.user!.language === "ta" ? "ta" : "en") as "en" | "ta";
-    const [subjects, topics, sessions] = await Promise.all([
+    const [subjects, topics, rows] = await Promise.all([
       Subject.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean(),
       Topic.find({ examId: exam.id, status: "published" }).sort({ order: 1 }).lean(),
-      PracticeSession.find({ studentId: owner(req), examId: exam.id, status: "completed" }).select("answers").lean(),
+      practiceAnswers(owner(req), exam.id),
     ]);
-    const answeredIds = [...new Set(sessions.flatMap((session) => session.answers.map((answer) => answer.questionId)))];
-    const questions = answeredIds.length
-      ? await Question.find({ id: { $in: answeredIds } }).select("id topicId").lean()
-      : [];
-    const topicByQuestion = new Map(questions.map((question) => [question.id, question.topicId]));
+    const levels = levelsByTopic(rows);
     const topicStats = new Map<string, { correct: number; total: number }>();
-    for (const session of sessions) {
-      for (const answer of session.answers) {
-        const topicId = topicByQuestion.get(answer.questionId);
-        if (!topicId) continue;
-        const stat = topicStats.get(topicId) || { correct: 0, total: 0 };
-        stat.total += 1;
-        if (answer.correct) stat.correct += 1;
-        topicStats.set(topicId, stat);
-      }
+    for (const row of rows) {
+      const stat = topicStats.get(row.topicId) || { correct: 0, total: 0 };
+      stat.total += 1;
+      if (row.correct) stat.correct += 1;
+      topicStats.set(row.topicId, stat);
     }
     res.json({
       data: {
@@ -169,6 +162,7 @@ studentRouter.get(
             .map((topic) => {
               const stat = topicStats.get(topic.id) || { correct: 0, total: 0 };
               const accuracy = stat.total ? Math.round((stat.correct / stat.total) * 100) : 0;
+              const level = levels.get(topic.id) || NO_PROGRESS;
               return {
                 ...topic,
                 name: localizedLabel(topic, language),
@@ -176,7 +170,10 @@ studentRouter.get(
                 nameTa: topic.nameTa || topic.name,
                 attempted: stat.total,
                 accuracy,
-                studied: stat.total >= 2 && accuracy >= 60,
+                /** Easy passed at least. */
+                studied: level.step >= 1,
+                /** Easy -> Medium -> Hard standing; percent = levels passed of 3. */
+                level,
               };
             }),
         })),
@@ -269,18 +266,19 @@ studentRouter.get(
   "/analytics",
   wrap(async (req, res) => {
     const examId = req.user!.primaryExamId;
-    const [sessions, topicCount, attempts] = await Promise.all([
-      PracticeSession.find({ studentId: owner(req), status: "completed" }).select("examId answers completedAt").lean(),
-      examId ? Topic.countDocuments({ examId, status: "published" }) : Promise.resolve(0),
+    const [sessions, examTopics, attempts] = await Promise.all([
+      PracticeSession.find({ studentId: owner(req), kind: { $ne: "retry" } }).select("examId answers completedAt").lean(),
+      examId ? Topic.find({ examId, status: "published" }).select("id").lean() : Promise.resolve([]),
       MockAttempt.find({ studentId: owner(req), status: "submitted" })
         .sort({ submittedAt: 1 })
         .select("mockId rawScore maxScore submittedAt")
         .limit(30)
         .lean(),
     ]);
+    const topicCount = examTopics.length;
     const answeredIds = [...new Set(sessions.flatMap((session) => session.answers.map((answer) => answer.questionId)))];
     const questions = answeredIds.length
-      ? await Question.find({ id: { $in: answeredIds } }).select("id subjectId topicId").lean()
+      ? await Question.find({ id: { $in: answeredIds } }).select("id subjectId topicId difficulty").lean()
       : [];
     const questionMap = new Map(questions.map((question) => [question.id, question]));
     const subjects = await Subject.find({ id: { $in: [...new Set(questions.map((question) => question.subjectId))] } })
@@ -306,17 +304,13 @@ studentRouter.get(
         bySubject.set(question.subjectId, bucket);
       }
     }
-    const studiedTopics = new Set<string>();
-    if (examId) {
-      for (const session of sessions.filter((item) => item.examId === examId)) {
-        for (const answer of session.answers) {
-          const topicId = answer.correct ? questionMap.get(answer.questionId)?.topicId : undefined;
-          if (topicId) studiedTopics.add(topicId);
-        }
-      }
-    }
+    // Syllabus progress = average Easy -> Medium -> Hard standing over the exam's topics.
+    const levels = examId ? await topicProgress(owner(req), examId) : new Map();
+    const studiedTopics = examTopics.filter((topic) => (levels.get(topic.id)?.step || 0) >= 1);
     const accuracy = total ? Math.round((correct / total) * 100) : 0;
-    const syllabus = topicCount ? Math.round((studiedTopics.size / topicCount) * 100) : 0;
+    const syllabus = topicCount
+      ? Math.round(examTopics.reduce((sum, topic) => sum + (levels.get(topic.id)?.percent || 0), 0) / topicCount)
+      : 0;
     const readiness = total < 8 ? "Building" : accuracy >= 75 && syllabus >= 40 ? "Strong trend" : "Developing";
     res.json({
       data: {
@@ -324,7 +318,8 @@ studentRouter.get(
         attempted: total,
         streak: req.user!.streak,
         syllabusCompletion: syllabus,
-        studiedTopics: studiedTopics.size,
+        studiedTopics: studiedTopics.length,
+        masteredTopics: examTopics.filter((topic) => levels.get(topic.id)?.mastered).length,
         topicCount,
         readiness,
         caveat: "Readiness is an estimate from your practice. It is not a guarantee of passing.",
@@ -527,7 +522,7 @@ studentRouter.get(
       user.primaryExamId ? Exam.findOne({ id: user.primaryExamId }).select("id name authority").lean() : Promise.resolve(null),
       PlannerTask.find({ studentId: user.id, dueDate: today }).lean(),
       PracticeSession.aggregate<{ total: number; correct: number }>([
-        { $match: { studentId: user.id, status: "completed" } },
+        { $match: { studentId: user.id, kind: { $ne: "retry" } } },
         { $unwind: "$answers" },
         { $group: { _id: null, total: { $sum: 1 }, correct: { $sum: { $cond: ["$answers.correct", 1, 0] } } } },
       ]),

@@ -8,7 +8,7 @@ import { Eyebrow } from "@/components/Shell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 
 type Exam = { id: string; name: string; authority: string; description: string; pattern: { durationMinutes: number; totalQuestions: number; marksPerQuestion: number; negativeMarks: number } };
-type Detail = Exam & { subjects: Array<{ id: string; name: string; topics: Array<{ id: string; name: string; studied: boolean; accuracy: number; attempted: number }> }> };
+type Detail = Exam & { subjects: Array<{ id: string; name: string; topics: Array<{ id: string; name: string; studied: boolean; level?: { percent: number; mastered: boolean }; accuracy: number; attempted: number }> }> };
 
 export default function ExamsPage() {
   const { user, refreshUser } = useAuth();
@@ -60,11 +60,12 @@ export default function ExamsPage() {
         <Card sx={{ p: 2, mt: 2 }}>
           <Typography fontWeight={800} sx={{ mb: 1 }}>Syllabus progress · {detail.name}</Typography>
           {detail.subjects.map((subject) => {
-            const studied = subject.topics.filter((topic) => topic.studied).length;
-            const width = subject.topics.length ? Math.round((studied / subject.topics.length) * 100) : 0;
+            // Easy -> Medium -> Hard progress averaged over the subject's topics.
+            const studied = subject.topics.filter((topic) => topic.level?.mastered).length;
+            const width = subject.topics.length ? Math.round(subject.topics.reduce((sum, topic) => sum + (topic.level?.percent || 0), 0) / subject.topics.length) : 0;
             return (
               <Box key={subject.id} sx={{ mb: 2 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}><Typography>{subject.name}</Typography><b>{studied} / {subject.topics.length} topics</b></Box>
+                <Box sx={{ display: "flex", justifyContent: "space-between" }}><Typography>{subject.name}</Typography><b>{width}% · {studied} / {subject.topics.length} mastered</b></Box>
                 <LinearProgress variant="determinate" value={width} />
                 {subject.topics.map((topic) => <Typography key={topic.id} fontSize={13} color="text.secondary">{topic.name} · {topic.attempted} answered · {topic.accuracy}% accuracy</Typography>)}
               </Box>

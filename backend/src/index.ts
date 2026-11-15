@@ -2,7 +2,7 @@
 import { config } from "./config.js";
 import { connectDb } from "./db.js";
 import { createApp } from "./app.js";
-import { backfillStemKeys, startDailyMockScheduler } from "./jobs.js";
+import { backfillMockQuestionSources, backfillSeen, backfillStemKeys, startDailyMockScheduler } from "./jobs.js";
 
 const app = createApp();
 
@@ -11,6 +11,12 @@ startDailyMockScheduler();
 void backfillStemKeys()
   .then((count) => count && console.log(`Backfilled stemKey on ${count} questions.`))
   .catch((error) => console.warn(`stemKey backfill failed: ${error?.message || error}`));
+void backfillSeen()
+  .then((count) => count && console.log(`Recorded ${count} previously shown questions so the shared pool never repeats them.`))
+  .catch((error) => console.warn(`Seen backfill failed: ${error?.message || error}`));
+void backfillMockQuestionSources()
+  .then((count) => count && console.log(`Marked ${count} questions as daily-mock questions.`))
+  .catch((error) => console.warn(`Mock question source backfill failed: ${error?.message || error}`));
 
 app.listen(config.port, "0.0.0.0", () => {
   console.log(`ArivuVazhi API listening on port ${config.port}`);

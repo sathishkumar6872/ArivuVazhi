@@ -243,6 +243,71 @@ export function ColorIcon({ icon, accent = "green", size = 44 }: { icon: IconNam
   );
 }
 
+export type Level = "easy" | "medium" | "hard";
+export const LEVELS: Level[] = ["easy", "medium", "hard"];
+const LEVEL_LABEL: Record<Level, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
+
+/** A topic with no answers yet: Easy open, the rest locked. */
+export const FRESH_LEVEL = {
+  current: "easy" as Level,
+  step: 0,
+  mastered: false,
+  percent: 0,
+  levels: {
+    easy: { answered: 0, correct: 0, accuracy: 0, unlocked: true, passed: false },
+    medium: { answered: 0, correct: 0, accuracy: 0, unlocked: false, passed: false },
+    hard: { answered: 0, correct: 0, accuracy: 0, unlocked: false, passed: false },
+  },
+};
+
+/**
+ * Easy → Medium → Hard chips for one topic: ✓ passed, ▶ current, 🔒 locked.
+ * Tapping an open level starts practice at that level.
+ */
+export function LevelSteps({ level, onPick }: { level?: typeof FRESH_LEVEL | null; onPick?: (level: Level) => void }) {
+  const { palette } = useTheme();
+  const { t } = useLocale();
+  const progress = level || FRESH_LEVEL;
+  return (
+    <View style={{ flexDirection: "row", gap: 6, marginTop: 8 }}>
+      {LEVELS.map((name) => {
+        const state = progress.levels[name];
+        const current = !progress.mastered && progress.current === name;
+        const color = state.passed ? palette.green : current ? palette.primary : palette.muted;
+        const icon: IconName = state.passed ? "checkmark-circle" : state.unlocked ? "play-circle" : "lock-closed";
+        return (
+          <Pressable
+            key={name}
+            accessibilityRole="button"
+            accessibilityLabel={`${LEVEL_LABEL[name]} ${state.passed ? "passed" : state.unlocked ? "open" : "locked"}`}
+            disabled={!state.unlocked || !onPick}
+            onPress={() => onPick?.(name)}
+            style={{
+              flex: 1,
+              borderRadius: 12,
+              borderWidth: current ? 1.5 : 1,
+              borderColor: state.passed ? palette.green : current ? palette.primary : palette.line,
+              backgroundColor: state.passed ? palette.greenSoft : palette.surface,
+              paddingVertical: 6,
+              paddingHorizontal: 4,
+              alignItems: "center",
+              opacity: state.unlocked ? 1 : 0.6,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Ionicons name={icon} size={13} color={color} />
+              <Text style={{ color, fontWeight: "800", fontSize: 12 }}>{t(LEVEL_LABEL[name])}</Text>
+            </View>
+            <Text style={{ color: palette.muted, fontSize: 10, marginTop: 2 }}>
+              {state.answered ? `${state.accuracy}% · ${state.answered} Q` : state.unlocked ? "Start" : "Locked"}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** Quick-action tile: white card, coloured filled icon, label under it. */
 export function IconTile({ icon, label, onPress, accent = "green" }: { icon: IconName; label: string; onPress: () => void; accent?: Accent }) {
   const { palette } = useTheme();

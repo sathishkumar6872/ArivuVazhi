@@ -1,8 +1,9 @@
 import { hostname } from "node:os";
 import { dayKey, nid } from "./http.js";
 import { nextIstRun, stemKey } from "./governance.js";
-import { DailyMockSet, Exam, JobLock, JobRun, Question, User } from "./models.js";
+import { Bookmark, DailyMockSet, Exam, JobLock, JobRun, MockAttempt, MockTest, PracticeSession, Question, QuestionReport, QuestionSeen, User } from "./models.js";
 import { ensureDailyMock, generateDailyMockSet } from "./daily-mock.js";
+import { autoReviewQuestions } from "./question-ai.js";
 
 const JOB = "daily_mock_sets";
 /** Only students active in this many days get a set, to bound AI spend. */
@@ -140,6 +141,15 @@ async function execute(run: InstanceType<typeof JobRun>, trigger: Trigger) {
         await run.save();
       }
     }
+    // Housekeeping after the sets: AI-check the review backlog and drop week-old leftovers.
+    // Failures here never fail the run; the sets are what students need.
+    try {
+      const reviewed = await reviewBacklog();
+      const cleaned = await cleanupOldData();
+      console.log(JSON.stringify({ job: JOB, housekeeping: { reviewed, ...cleaned } }));
+    } catch (error) {
+      console.warn(`Daily housekeeping failed: ${error instanceof Error ? error.message : error}`);
+    }
     run.status = "done";
   } catch (error) {
     run.status = "failed";
@@ -199,6 +209,18 @@ export async function backfillStemKeys() {
   return rows.length;
 }
 
+/**
+ * One-off: questions generated for daily mocks before they had their own source were
+ * stored as "student_ai" and could appear in practice. Mark them so practice skips them.
+ */
+export async function backfillMockQuestionSources() {
+  const sets = await DailyMockSet.find({}).select("questionIds sections.questionIds").lean();
+  const ids = [...new Set(sets.flatMap((set) => [...(set.questionIds || []), ...(set.sections || []).flatMap((section) => section.questionIds || [])]))];
+  if (!ids.length) return 0;
+  const result = await Question.updateMany({ id: { $in: ids }, source: "student_ai" }, { $set: { source: "daily_mock" } });
+  return result.modifiedCount;
+}
+
 /** One run's progress, for whoever triggered it (cron or admin). */
 export async function getDailyMockRun(runId: string) {
   const run = await JobRun.findOne({ id: runId, job: JOB })
@@ -227,4 +249,91 @@ export async function dailyMockJobStatus() {
     lastRun: last,
     today: Object.fromEntries(today.map((row) => [row._id, row.n])),
   };
+}
+
+/** How long leftovers are kept before cleanup. */
+const RETAIN_DAYS = 7;
+
+/**
+ * Daily cleanup (runs with the 02:00 job):
+ * - daily mock sets older than 7 days that were never attempted (their questions stay in the pool);
+ * - abandoned practice sets with no answers, older than 7 days;
+ * - rejected questions older than 7 days that no attempt, answer or bookmark refers to.
+ * Sync receipts and job runs expire through TTL indexes (7 days); AI usage keeps 40 days for the monthly budget.
+ */
+export async function cleanupOldData(now = new Date()) {
+  const cutoff = new Date(now.getTime() - RETAIN_DAYS * 24 * 60 * 60 * 1000);
+  const cutoffDay = dayKey(cutoff);
+
+  const oldSets = await DailyMockSet.find({ dayKey: { $lt: cutoffDay } }).select("id studentId mockId dayKey").lean();
+  let mockSets = 0;
+  if (oldSets.length) {
+    const attempts = await MockAttempt.find({ dayKey: { $lt: cutoffDay }, studentId: { $in: [...new Set(oldSets.map((set) => set.studentId))] } })
+      .select("studentId mockId dayKey")
+      .lean();
+    const attempted = new Set(attempts.map((attempt) => `${attempt.studentId}:${attempt.mockId}:${attempt.dayKey}`));
+    const drop = oldSets.filter((set) => !attempted.has(`${set.studentId}:${set.mockId}:${set.dayKey}`)).map((set) => set.id);
+    if (drop.length) mockSets = (await DailyMockSet.deleteMany({ id: { $in: drop } })).deletedCount || 0;
+  }
+
+  const practiceSets =
+    (await PracticeSession.deleteMany({ status: "abandoned", "answers.0": { $exists: false }, updatedAt: { $lt: cutoff } })).deletedCount || 0;
+
+  const rejected = await Question.find({ status: "rejected", updatedAt: { $lt: cutoff } }).select("id").limit(1000).lean();
+  let questions = 0;
+  if (rejected.length) {
+    const ids = rejected.map((row) => row.id);
+    const [inAttempts, inAnswers, inBookmarks] = await Promise.all([
+      MockAttempt.distinct("questionIds", { questionIds: { $in: ids } }),
+      PracticeSession.distinct("answers.questionId", { "answers.questionId": { $in: ids } }),
+      Bookmark.distinct("questionId", { questionId: { $in: ids } }),
+    ]);
+    const used = new Set([...inAttempts, ...inAnswers, ...inBookmarks].map(String));
+    const unused = ids.filter((id) => !used.has(id));
+    if (unused.length) {
+      questions = (await Question.deleteMany({ id: { $in: unused } })).deletedCount || 0;
+      await Promise.all([QuestionSeen.deleteMany({ questionId: { $in: unused } }), QuestionReport.deleteMany({ questionId: { $in: unused } })]);
+    }
+  }
+  return { mockSets, practiceSets, questions };
+}
+
+/** AI-check up to `limit` AI questions still waiting for review (oldest first). */
+export async function reviewBacklog(limit = 200) {
+  const pending = await Question.find({ status: "under_review", reviewedBy: "", flagReason: "", flagged: { $ne: true }, source: { $in: ["student_ai", "daily_mock"] } })
+    .sort({ createdAt: 1 })
+    .limit(limit)
+    .select("id")
+    .lean();
+  if (!pending.length) return 0;
+  return autoReviewQuestions(pending.map((row) => row.id));
+}
+
+/**
+ * One-off: build the "seen" list from history so the shared pool never repeats a
+ * question a student already had (practice answers, daily mock sets, mock attempts).
+ */
+export async function backfillSeen() {
+  if (await QuestionSeen.estimatedDocumentCount()) return 0;
+  const rows: Array<{ studentId: string; examId: string; questionId: string; via: "practice" | "mock" }> = [];
+  const sessions = await PracticeSession.find({ "answers.0": { $exists: true } }).select("studentId examId answers.questionId").lean();
+  for (const session of sessions) for (const answer of session.answers) rows.push({ studentId: session.studentId, examId: session.examId, questionId: answer.questionId, via: "practice" });
+  const sets = await DailyMockSet.find({ status: "ready" }).select("studentId examId questionIds").lean();
+  for (const set of sets) for (const questionId of set.questionIds) rows.push({ studentId: set.studentId, examId: set.examId, questionId, via: "mock" });
+  const attempts = await MockAttempt.find({ "questionIds.0": { $exists: true } }).select("studentId mockId questionIds").lean();
+  const mocks = await MockTest.find({ id: { $in: [...new Set(attempts.map((attempt) => attempt.mockId))] } }).select("id examId").lean();
+  const examOf = new Map(mocks.map((mock) => [mock.id, mock.examId]));
+  for (const attempt of attempts) {
+    const examId = examOf.get(attempt.mockId);
+    if (examId) for (const questionId of attempt.questionIds || []) rows.push({ studentId: attempt.studentId, examId, questionId, via: "mock" });
+  }
+  for (let at = 0; at < rows.length; at += 1000) {
+    await QuestionSeen.bulkWrite(
+      rows.slice(at, at + 1000).map((row) => ({
+        updateOne: { filter: { studentId: row.studentId, questionId: row.questionId }, update: { $setOnInsert: { ...row, at: new Date() } }, upsert: true },
+      })),
+      { ordered: false },
+    );
+  }
+  return rows.length;
 }

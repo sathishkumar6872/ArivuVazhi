@@ -349,7 +349,7 @@ export function AchievementsScreen({ user, back }: { user: Student; back: () => 
     { title: "First practice", detail: "Complete one practice set", earned: history.some((item) => item.status === "completed") },
     { title: "Five-day learner", detail: "Reach a 5 day study streak", earned: (stats.streak || user.streak || 0) >= 5 },
     { title: "Accuracy builder", detail: "Reach 75% practice accuracy", earned: stats.accuracy >= 75 },
-    { title: "Syllabus explorer", detail: "Touch every syllabus topic", earned: stats.topicCount > 0 && stats.studiedTopics >= stats.topicCount },
+    { title: "Syllabus explorer", detail: "Pass Easy in every syllabus topic", earned: stats.topicCount > 0 && stats.studiedTopics >= stats.topicCount },
   ];
   return (
     <Screen>

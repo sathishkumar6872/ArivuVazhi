@@ -142,13 +142,22 @@ export const Question = mongoose.model(
       explanation: { type: String, default: "" },
       difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "medium" },
       language: { type: String, enum: ["en", "ta"], default: "en" },
-      source: { type: String, enum: ["admin", "ai", "pyq", "student_ai"], default: "student_ai" },
+      /** Where it came from. student_ai / daily_mock = AI-generated for a student's practice / daily mock. */
+      source: { type: String, enum: ["admin", "ai", "pyq", "student_ai", "daily_mock"], default: "student_ai" },
       /**
-       * Set on AI questions generated for one student (practice / daily mock). While
-       * `under_review` they are visible only to that student; once an admin approves
-       * (published) they join the shared bank.
+       * The student an AI question was generated for. While `under_review` only that
+       * student sees it; once published (by the AI check or an admin) it joins the
+       * exam's shared pool used by every student's practice and daily mock.
        */
       ownerStudentId: { type: String, default: "" },
+      /** Who published it: "auto" (AI answer check), an admin's id, or "" (not reviewed). */
+      reviewedBy: { type: String, default: "" },
+      /** Hidden from every student until an admin looks at it (student reports, wrong-key signal, failed AI check). */
+      flagged: { type: Boolean, default: false },
+      flagReason: { type: String, default: "" },
+      reportCount: { type: Number, default: 0 },
+      /** Practice answers across all students, for the "key may be wrong" signal. */
+      stats: { answered: { type: Number, default: 0 }, correct: { type: Number, default: 0 } },
       /** Normalised stem used to reject duplicate AI questions. */
       stemKey: { type: String, default: "" },
       status: {
@@ -248,7 +257,11 @@ export const PracticeSession = mongoose.model(
       difficulty: { type: String, default: "" },
       questionIds: { type: [String], default: [] },
       answers: { type: [answerSchema], default: [] },
-      status: { type: String, enum: ["active", "completed"], default: "active" },
+      /** abandoned = the student started another set before finishing; its unanswered questions are free again. */
+      status: { type: String, enum: ["active", "completed", "abandoned"], default: "active" },
+      /** retry = re-practising the wrong answers of `retryOf`; never counted in progress. */
+      kind: { type: String, enum: ["practice", "retry"], default: "practice" },
+      retryOf: { type: String, default: "" },
       startedAt: { type: Date, default: Date.now },
       completedAt: { type: Date, default: null },
     },
@@ -643,3 +656,45 @@ AiUsage.schema.index({ userId: 1, createdAt: -1 });
 KnowledgeSource.schema.index({ status: 1, rightsStatus: 1, examId: 1 });
 Question.schema.index({ ownerStudentId: 1, examId: 1, status: 1 });
 Question.schema.index({ examId: 1, stemKey: 1 });
+PracticeSession.schema.index({ studentId: 1, examId: 1, createdAt: -1 });
+Question.schema.index({ examId: 1, subjectId: 1, language: 1, status: 1 });
+Question.schema.index({ status: 1, flagged: 1, "stats.answered": -1 });
+
+/** Every question a student has been shown (practice answer or daily mock), so the shared pool never repeats one. */
+export const QuestionSeen = mongoose.model(
+  "QuestionSeen",
+  new Schema(
+    {
+      studentId: { type: String, required: true },
+      examId: { type: String, required: true },
+      questionId: { type: String, required: true },
+      via: { type: String, enum: ["practice", "mock"], default: "practice" },
+      at: { type: Date, default: Date.now },
+    },
+    { timestamps: false },
+  ),
+);
+QuestionSeen.schema.index({ studentId: 1, questionId: 1 }, { unique: true });
+QuestionSeen.schema.index({ studentId: 1, examId: 1, at: -1 });
+
+/** A student's report that a question is wrong or unclear (one per student per question). */
+export const QuestionReport = mongoose.model(
+  "QuestionReport",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      questionId: { type: String, required: true, index: true },
+      studentId: { type: String, required: true },
+      reason: { type: String, enum: ["wrong_answer", "unclear", "other"], default: "other" },
+      note: { type: String, default: "" },
+    },
+    { timestamps: true },
+  ),
+);
+QuestionReport.schema.index({ questionId: 1, studentId: 1 }, { unique: true });
+
+// Housekeeping: short-lived records expire on their own (MongoDB TTL).
+SyncReceipt.schema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
+JobRun.schema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
+// AI usage must cover the whole month for the monthly budget, so it keeps 40 days.
+AiUsage.schema.index({ createdAt: 1 }, { expireAfterSeconds: 40 * 24 * 60 * 60 });

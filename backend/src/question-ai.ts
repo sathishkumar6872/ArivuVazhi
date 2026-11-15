@@ -4,7 +4,7 @@ import { completeGemini } from "./gemini-settings.js";
 import { config } from "./config.js";
 import { HttpError, nid } from "./http.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "./ai-budget.js";
-import { AiUsage, AppConfig, Exam, PracticeSession, Question, Subject, Topic, User } from "./models.js";
+import { AiUsage, AppConfig, Exam, PracticeSession, Question, QuestionSeen, Subject, Topic, User } from "./models.js";
 import { stemKey } from "./governance.js";
 import { getOpenAiSettings } from "./openai-settings.js";
 
@@ -204,8 +204,12 @@ async function fakeBundle(input: { topicName: string; count: number; avoidStems?
 async function pickTopicAnchor(input: {
   examId: string;
   topicId?: string;
+  topicIds?: string[];
   subjectId?: string;
-}) {
+}): Promise<{ topic: any; subject: any }> {
+  if (!input.topicId && input.topicIds?.length) {
+    return pickTopicAnchor({ examId: input.examId, topicId: input.topicIds[Math.floor(Math.random() * input.topicIds.length)] });
+  }
   if (input.topicId) {
     const topic = await Topic.findOne({ id: input.topicId, examId: input.examId }).lean();
     if (!topic) throw new HttpError(404, "Topic not found for this exam", "NOT_FOUND");
@@ -263,13 +267,50 @@ type BankQuestion = {
  * that student (still under review, never shown to anyone else).
  */
 export function visibleToStudent(studentId: string) {
-  return { $or: [{ status: "published" }, { status: "under_review", ownerStudentId: studentId }] };
+  // Shared pool: published questions (AI-checked or admin-approved) for everyone, plus the
+  // student's own not-yet-reviewed ones. Flagged questions are hidden until an admin acts.
+  return { flagged: { $ne: true }, $or: [{ status: "published" }, { status: "under_review", ownerStudentId: studentId }] };
 }
 
-/** Every question this student has already been served in practice for the exam. */
+/** Remember that a student has been shown these questions (the pool never repeats them). */
+export async function recordSeen(studentId: string, examId: string, questionIds: string[], via: "practice" | "mock") {
+  const ids = [...new Set(questionIds.filter(Boolean))];
+  if (!ids.length) return;
+  await QuestionSeen.bulkWrite(
+    ids.map((questionId) => ({
+      updateOne: {
+        filter: { studentId, questionId },
+        update: { $setOnInsert: { studentId, examId, questionId, via, at: new Date() } },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  );
+}
+
+/** Questions this student has been shown for the exam, newest first. */
+export async function seenQuestionIds(studentId: string, examId: string) {
+  const rows = await QuestionSeen.find({ studentId, examId }).sort({ at: -1 }).select("questionId").lean();
+  return rows.map((row) => row.questionId);
+}
+
+/**
+ * Questions this student must not be served again, newest first: everything they
+ * answered, plus the whole of a set still in progress. Questions left unanswered
+ * in a finished or abandoned set are free to come back.
+ */
+/** Everything a student must not be given again: seen questions plus the practice set in progress. */
+export async function excludedQuestionIds(studentId: string, examId: string) {
+  return (await seenPracticeIds(studentId, examId)).flat();
+}
+
 async function seenPracticeIds(studentId: string, examId: string) {
-  const sessions = await PracticeSession.find({ studentId, examId }).sort({ createdAt: -1 }).select("questionIds").lean();
-  return sessions.map((session) => session.questionIds);
+  const [active, seen] = await Promise.all([
+    PracticeSession.find({ studentId, examId, status: "active", kind: { $ne: "retry" } }).select("questionIds").lean(),
+    seenQuestionIds(studentId, examId),
+  ]);
+  // Newest first: the set in progress, then everything shown before (answered practice, daily mocks).
+  return [active.flatMap((session) => session.questionIds), seen];
 }
 
 export async function stemsFor(ids: string[], limit: number) {
@@ -292,6 +333,8 @@ export async function generateForStudent(input: {
   count: number;
   avoidStems: string[];
   feature: string;
+  /** daily_mock questions are kept out of practice. */
+  source?: "student_ai" | "daily_mock";
 }) {
   const label = (item: { name: string; nameEn?: string | null; nameTa?: string | null }) =>
     input.language === "ta" ? item.nameTa || item.name : item.nameEn || item.name;
@@ -327,7 +370,7 @@ export async function generateForStudent(input: {
       // The requested level, so the question lands in the pool the student chose (the model's own label can drift).
       difficulty: input.difficulty,
       language: input.language,
-      source: "student_ai",
+      source: input.source || "student_ai",
       ownerStudentId: input.studentId,
     });
   }
@@ -340,6 +383,10 @@ export async function generateForStudent(input: {
         rightsStatus: "not_applicable",
         marks: input.exam.pattern?.marksPerQuestion || 1.5,
       })),
+    );
+    // A second AI pass checks the answers; passing questions join the shared pool.
+    void autoReviewQuestions(docs.map((doc) => doc.id)).catch((error) =>
+      console.warn(`Auto-review failed: ${error instanceof Error ? error.message : error}`),
     );
   }
   const tokens = Math.ceil(JSON.stringify(generated).length / 4);
@@ -361,31 +408,35 @@ function prefetchPractice(input: {
   studentId: string;
   examId: string;
   topicId?: string;
+  topicIds?: string[];
   difficulty?: "easy" | "medium" | "hard";
   language: "en" | "ta";
   count: number;
 }) {
-  const key = `${input.studentId}:${input.examId}:${input.topicId || "*"}:${input.language}:${input.difficulty || "*"}`;
+  const key = `${input.studentId}:${input.examId}:${input.topicId || input.topicIds?.join(",") || "*"}:${input.language}:${input.difficulty || "*"}`;
   if (prefetching.has(key)) return;
   prefetching.add(key);
   void (async () => {
     try {
       const seen = (await seenPracticeIds(input.studentId, input.examId)).flat();
-      const ready = await Question.countDocuments({
-        examId: input.examId,
-        ownerStudentId: input.studentId,
-        status: "under_review",
-        language: input.language,
-        id: { $nin: seen },
-        ...(input.topicId ? { topicId: input.topicId } : {}),
-        // Count only questions at the chosen level; other levels don't help the next set.
-        ...(input.difficulty ? { difficulty: input.difficulty } : {}),
-      });
+      // Unseen questions already available to this student (shared pool + their own), capped for speed.
+      const ready = await Question.countDocuments(
+        {
+          examId: input.examId,
+          ...visibleToStudent(input.studentId),
+          language: input.language,
+          id: { $nin: seen },
+          ...(input.topicId ? { topicId: input.topicId } : input.topicIds?.length ? { topicId: { $in: input.topicIds } } : {}),
+          // Count only questions at the chosen level; other levels don't help the next set.
+          ...(input.difficulty ? { difficulty: input.difficulty } : {}),
+        },
+        { limit: input.count * 2 },
+      );
       // Keep two sets ahead so the next starts never wait on the AI.
       if (ready >= input.count * 2) return;
       const exam = await Exam.findOne({ id: input.examId, lifecycle: "published" }).lean();
       if (!exam) return;
-      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId });
+      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId, topicIds: input.topicIds });
       await generateForStudent({
         studentId: input.studentId,
         exam,
@@ -422,6 +473,8 @@ export async function ensurePracticeQuestions(input: {
   studentId: string;
   examId: string;
   topicId?: string;
+  /** Quick practice: any of these topics (e.g. the ones where the chosen level is unlocked). */
+  topicIds?: string[];
   difficulty?: "easy" | "medium" | "hard";
   language?: "en" | "ta";
   count: number;
@@ -436,8 +489,10 @@ export async function ensurePracticeQuestions(input: {
   const count = Math.min(20, Math.max(1, input.count));
   const seen = new Set(seenLists.flat());
 
+  // The exam's shared pool; questions this student was already shown (practice or daily mock) are excluded below.
   const scope: Record<string, unknown> = { examId: input.examId, ...visibleToStudent(input.studentId) };
   if (input.topicId) scope.topicId = input.topicId;
+  else if (input.topicIds?.length) scope.topicId = { $in: input.topicIds };
   const exact: Record<string, unknown> = { ...scope, language };
   if (input.difficulty) exact.difficulty = input.difficulty;
 
@@ -456,7 +511,7 @@ export async function ensurePracticeQuestions(input: {
   let generatedLive = 0;
   if (picked.length < count) {
     try {
-      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId });
+      const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId, topicIds: input.topicIds });
       const { docs } = await generateForStudent({
         studentId: input.studentId,
         exam,
@@ -503,7 +558,7 @@ export async function ensurePracticeQuestions(input: {
       "NO_QUESTIONS",
     );
   }
-  prefetchPractice({ studentId: input.studentId, examId: input.examId, topicId: input.topicId, difficulty: input.difficulty, language, count });
+  prefetchPractice({ studentId: input.studentId, examId: input.examId, topicId: input.topicId, topicIds: input.topicIds, difficulty: input.difficulty, language, count });
   return { questions: shuffle(picked), generatedLive, repeated };
 }
 
@@ -511,4 +566,78 @@ function exactScopeWithoutIds(scope: Record<string, unknown>) {
   const copy = { ...scope };
   delete copy.id;
   return copy;
+}
+
+
+const reviewSchema = z.object({
+  results: z.array(z.object({ index: z.number().int(), ok: z.boolean(), reason: z.string().optional().default("") })),
+});
+
+/**
+ * Independent AI check of generated MCQs: is the marked answer correct and is the
+ * question unambiguous and on-syllabus? Returns one verdict per question.
+ */
+async function checkMcqs(items: Array<{ stem: string; options: Array<{ key: string; text: string }>; correctKey: string; explanation: string }>) {
+  await assertAiBudgetAvailable("question review");
+  if (process.env.AI_FAKE_QUESTIONS === "1" && !config.isProd) {
+    return { verdicts: items.map(() => ({ ok: true, reason: "" })), provider: "fake" };
+  }
+  const provider = await resolveProvider();
+  if (provider === "local") throw new HttpError(503, "No AI provider for question review.", "AI_UNAVAILABLE");
+  const system = `You are a strict exam-question reviewer for Indian government exams.
+For each multiple-choice question decide if it is publishable: exactly one option is correct,
+the marked correctKey is that option, the explanation supports it, and the wording is clear.
+Return ONLY JSON: {"results":[{"index":0,"ok":true,"reason":""}]}. Give a short reason when ok is false.`;
+  const user = JSON.stringify(
+    items.map((item, index) => ({ index, stem: item.stem, options: item.options, correctKey: item.correctKey, explanation: item.explanation })),
+  );
+  const raw = await withTimeout(completeRaw(system, user, provider), "Question review");
+  const parsed = reviewSchema.parse(extractJson(raw));
+  const byIndex = new Map(parsed.results.map((row) => [row.index, row]));
+  const tokens = Math.ceil((user.length + raw.length) / 4);
+  await AiUsage.create({ id: nid(), userId: "system", provider, feature: "question_review", tokens, estimatedInr: estimateAiInr(tokens, provider) });
+  // Anything the reviewer did not return is treated as not checked (stays for an admin).
+  return { verdicts: items.map((_, index) => ({ ok: byIndex.get(index)?.ok === true, reason: byIndex.get(index)?.reason || "Not checked" })), provider };
+}
+
+/**
+ * Auto-approve: questions that pass the AI answer check are published to the exam's
+ * shared pool; the rest stay under review for an admin (and only their student sees them).
+ */
+export async function autoReviewQuestions(ids: string[]) {
+  const pending = await Question.find({ id: { $in: ids }, status: "under_review", reviewedBy: "" }).lean();
+  for (let at = 0; at < pending.length; at += 10) {
+    const batch = pending.slice(at, at + 10);
+    const { verdicts } = await checkMcqs(batch);
+    const passed = batch.filter((_, index) => verdicts[index].ok).map((question) => question.id);
+    if (passed.length) {
+      await Question.updateMany({ id: { $in: passed }, status: "under_review" }, { $set: { status: "published", reviewedBy: "auto" } });
+    }
+    // Failed ones keep their reason for the admin; they stay visible only to their own student.
+    await Promise.all(
+      batch.map((question, index) =>
+        verdicts[index].ok
+          ? null
+          : Question.updateOne({ id: question.id }, { $set: { flagReason: `AI check: ${verdicts[index].reason || "failed"}`.slice(0, 300) } }),
+      ),
+    );
+  }
+  return pending.length;
+}
+
+/** Practice signal: if most students get a question "wrong", its key is probably wrong. */
+export async function recordAnswerStats(questionId: string, correct: boolean) {
+  const updated = await Question.findOneAndUpdate(
+    { id: questionId },
+    { $inc: { "stats.answered": 1, "stats.correct": correct ? 1 : 0 } },
+    { new: true },
+  ).lean();
+  const answered = updated?.stats?.answered || 0;
+  const right = updated?.stats?.correct || 0;
+  if (updated && !updated.flagged && updated.reviewedBy !== "admin" && answered >= 20 && right / answered < 0.2) {
+    await Question.updateOne(
+      { id: questionId },
+      { $set: { flagged: true, flagReason: `Possible wrong key: ${Math.round((1 - right / answered) * 100)}% of ${answered} answers marked wrong` } },
+    );
+  }
 }

@@ -163,3 +163,70 @@ export function planMockSections(
   }
   return merged;
 }
+
+export const PRACTICE_LEVELS = ["easy", "medium", "hard"] as const;
+export type PracticeLevel = (typeof PRACTICE_LEVELS)[number];
+
+/** Pass mark per level: at least `min` answers, and `accuracy`% over the last `window` answers. */
+export const LEVEL_RULES: Record<PracticeLevel, { min: number; accuracy: number }> = {
+  easy: { min: 10, accuracy: 80 },
+  medium: { min: 10, accuracy: 70 },
+  hard: { min: 10, accuracy: 60 },
+};
+const LEVEL_WINDOW = 20;
+
+export type LevelState = { answered: number; correct: number; accuracy: number; unlocked: boolean; passed: boolean };
+export type TopicLevelProgress = {
+  levels: Record<PracticeLevel, LevelState>;
+  /** The level to practise next (the first not yet passed; "hard" once mastered). */
+  current: PracticeLevel;
+  /** Levels passed: 0–3. */
+  step: number;
+  mastered: boolean;
+  /** step as a percentage of the three levels. */
+  percent: number;
+};
+
+/** True once the level's pass mark has been met at any point (it never re-locks). */
+function levelPassed(results: boolean[], rule: { min: number; accuracy: number }) {
+  for (let end = rule.min; end <= results.length; end += 1) {
+    const window = results.slice(Math.max(0, end - LEVEL_WINDOW), end);
+    const correct = window.filter(Boolean).length;
+    if (window.length >= rule.min && (correct / window.length) * 100 >= rule.accuracy) return true;
+  }
+  return false;
+}
+
+/**
+ * Easy → Medium → Hard progression for one topic, from that topic's practice
+ * answers per level in the order they were given. Easy is always open; Medium
+ * opens when Easy is passed, Hard when Medium is passed; passing Hard = mastered.
+ */
+export function topicLevelProgress(answers: Partial<Record<PracticeLevel, boolean[]>>): TopicLevelProgress {
+  const levels = {} as Record<PracticeLevel, LevelState>;
+  let unlocked = true;
+  for (const level of PRACTICE_LEVELS) {
+    const results = answers[level] || [];
+    const recent = results.slice(-LEVEL_WINDOW);
+    const correct = results.filter(Boolean).length;
+    const passed: boolean = unlocked && levelPassed(results, LEVEL_RULES[level]);
+    levels[level] = {
+      answered: results.length,
+      correct,
+      accuracy: recent.length ? Math.round((recent.filter(Boolean).length / recent.length) * 100) : 0,
+      unlocked,
+      passed,
+    };
+    unlocked = passed;
+  }
+  const step = PRACTICE_LEVELS.filter((level) => levels[level].passed).length;
+  const current = PRACTICE_LEVELS.find((level) => !levels[level].passed) || "hard";
+  return { levels, current, step, mastered: step === 3, percent: Math.round((step / 3) * 100) };
+}
+
+/** What a student must do to open a locked level, for the error shown to them. */
+export function unlockHint(level: PracticeLevel) {
+  if (level === "medium") return `Score ${LEVEL_RULES.easy.accuracy}% in Easy (at least ${LEVEL_RULES.easy.min} questions) on this topic to unlock Medium.`;
+  if (level === "hard") return `Score ${LEVEL_RULES.medium.accuracy}% in Medium (at least ${LEVEL_RULES.medium.min} questions) on this topic to unlock Hard.`;
+  return "";
+}

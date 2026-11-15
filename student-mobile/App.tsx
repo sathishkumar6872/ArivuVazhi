@@ -148,7 +148,7 @@ function Shell({ user, setUser, onLogout }: { user: Student; setUser: (user: Stu
         {route.name === "practice" && <PracticeScreen user={user} go={(next) => open(next, "push")} />}
         {route.name === "topics" && <TopicsScreen route={route} back={back} go={(next) => open(next, "push")} />}
         {route.name === "quiz" && <QuizScreen route={route} back={back} onDone={(next) => open(next, "replace")} />}
-        {route.name === "practiceResult" && <PracticeResultScreen route={route} back={back} />}
+        {route.name === "practiceResult" && <PracticeResultScreen route={route} back={back} go={(next) => open(next, "replace")} />}
         {route.name === "bookmarks" && <BookmarksScreen back={back} />}
         {route.name === "tutor" && <TutorScreen user={user} go={(next) => open(next, "push")} />}
         {route.name === "chat" && <ChatScreen user={user} conversationId={route.conversationId} starter={route.starter} back={back} />}

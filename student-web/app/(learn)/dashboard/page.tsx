@@ -58,7 +58,7 @@ export default function DashboardPage() {
             <Box>
               <Typography sx={{ opacity: 0.85, fontWeight: 700 }}>Preparation progress</Typography>
               <Typography sx={{ fontSize: 56, fontWeight: 800, lineHeight: 1.1 }}>{progress}%</Typography>
-              <Typography sx={{ opacity: 0.9 }}>{analytics?.studiedTopics || 0} of {analytics?.topicCount || 0} topics touched · {data?.streak || 0} day streak</Typography>
+              <Typography sx={{ opacity: 0.9 }}>{analytics?.studiedTopics || 0} of {analytics?.topicCount || 0} topics past Easy · {data?.streak || 0} day streak</Typography>
               <Button component={Link} href="/practice" variant="contained" sx={{ mt: 2, bgcolor: "white", color: "#4C3AE0", background: "white" }}>Continue</Button>
             </Box>
             <Box sx={{ width: 140, height: 120, borderRadius: 4, bgcolor: "rgba(255,255,255,.16)", display: { xs: "none", sm: "grid" }, placeItems: "center", fontSize: 54 }}>🎯</Box>

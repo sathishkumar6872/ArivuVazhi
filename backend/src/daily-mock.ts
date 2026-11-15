@@ -1,7 +1,7 @@
 import { HttpError, dayKey, nid } from "./http.js";
 import { planMockSections } from "./governance.js";
 import { DailyMockSet, Exam, MockTest, Question, Subject, Topic, User } from "./models.js";
-import { generateForStudent, shuffle } from "./question-ai.js";
+import { excludedQuestionIds, generateForStudent, recordSeen, shuffle, visibleToStudent } from "./question-ai.js";
 
 /** Optional ceiling on questions per daily mock; 0 (default) = the full exam pattern. */
 const CAP = Number(process.env.DAILY_MOCK_MAX_QUESTIONS || 0);
@@ -215,6 +215,28 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
 
     const language: "en" | "ta" = student?.language === "ta" ? "ta" : "en";
     const recent = await recentStemsBySubject(input.studentId, exam.id);
+
+    // 1. Shared pool first: questions of this exam, subject and language the student has never been shown.
+    // Exclude what the student has seen and the practice set they may be doing right now.
+    const seen = await excludedQuestionIds(input.studentId, exam.id);
+    const taken = new Set(sections.flatMap((section) => section.questionIds));
+    for (const section of sections) {
+      const need = section.target - section.questionIds.length;
+      if (need <= 0) continue;
+      const rows = await Question.aggregate<{ id: string }>([
+        { $match: { examId: exam.id, subjectId: section.subjectId, language, ...visibleToStudent(input.studentId), id: { $nin: [...seen, ...taken] } } },
+        { $sample: { size: need } },
+        { $project: { _id: 0, id: 1 } },
+      ]);
+      for (const row of rows) {
+        section.questionIds.push(row.id);
+        taken.add(row.id);
+      }
+    }
+    await persist();
+    // Reserve them at once, so practice running in parallel cannot serve the same questions.
+    await recordSeen(input.studentId, exam.id, [...taken], "mock");
+    // 2. Only what the pool could not cover is generated (and joins the pool for everyone).
     let provider = "";
     let fatal: unknown = null;
 
@@ -246,11 +268,13 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
             count: task.count,
             avoidStems: stems.slice(0, 30),
             feature: "daily_mock_generate",
+            source: "daily_mock",
           });
           provider = result.provider;
           const room = Math.max(0, task.section.target - task.section.questionIds.length);
           const take = result.docs.slice(0, room);
           task.section.questionIds.push(...take.map((doc) => doc.id));
+          await recordSeen(input.studentId, exam.id, take.map((doc) => doc.id), "mock");
           recent.set(task.section.subjectId, [...take.map((doc) => doc.stem), ...stems].slice(0, 40));
           added += take.length;
           await persist();
@@ -271,8 +295,10 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
     await saving;
     await DailyMockSet.updateOne(
       { id: setId },
-      { $set: { questionIds, status: "ready", provider, error: "", sections, target, progress: questionIds.length } },
+      { $set: { questionIds, status: "ready", provider: provider || "pool", error: "", sections, target, progress: questionIds.length } },
     );
+    // Shown in a mock = seen: never offered to this student again, in practice or later mocks.
+    await recordSeen(input.studentId, exam.id, questionIds, "mock");
     return (await DailyMockSet.findOne({ id: setId }))!;
   } catch (error) {
     await saving.catch(() => undefined);

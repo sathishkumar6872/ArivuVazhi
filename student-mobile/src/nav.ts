@@ -15,8 +15,32 @@ export type Route =
   | { name: "pyqPaper"; paperId: string }
   | { name: "practice" }
   | { name: "topics"; subjectId: string; subjectName: string; examId: string }
-  | { name: "quiz"; examId: string; topicId?: string; title: string; difficulty?: "easy" | "medium" | "hard" }
-  | { name: "practiceResult"; correct: number; answered: number; total: number; pendingOffline?: boolean }
+  | {
+      name: "quiz";
+      examId: string;
+      topicId?: string;
+      title: string;
+      difficulty?: "easy" | "medium" | "hard";
+      /** Resume this unfinished set instead of starting a new one. */
+      sessionId?: string;
+      /** Re-practise the wrong answers of this set. */
+      retryOf?: string;
+    }
+  | {
+      name: "practiceResult";
+      sessionId: string;
+      examId: string;
+      topicId?: string;
+      title: string;
+      difficulty?: "easy" | "medium" | "hard";
+      kind?: "practice" | "retry";
+      correct: number;
+      answered: number;
+      total: number;
+      /** Level standing of the practised topics, from the complete call. */
+      topics?: any[];
+      pendingOffline?: boolean;
+    }
   | { name: "bookmarks" }
   | { name: "tutor" }
   | { name: "chat"; conversationId?: string; starter?: string }

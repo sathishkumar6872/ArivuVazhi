@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Router } from "express";
 import { z } from "zod";
 import { audit, requireAuth, requireRole } from "../auth.js";
@@ -462,8 +463,15 @@ adminRouter.get(
     const filter: Record<string, unknown> = {};
     if (typeof req.query.examId === "string" && req.query.examId) filter.examId = req.query.examId;
     if (typeof req.query.status === "string" && req.query.status) filter.status = req.query.status;
+    if (req.query.flagged === "true") filter.flagged = true;
+    if (typeof req.query.reviewedBy === "string" && req.query.reviewedBy) {
+      filter.reviewedBy = req.query.reviewedBy === "admin" ? { $nin: ["", "auto"] } : req.query.reviewedBy === "none" ? "" : req.query.reviewedBy;
+    }
+    if (typeof req.query.q === "string" && req.query.q.trim()) filter.stem = { $regex: escapeRegex(req.query.q.trim().slice(0, 80)), $options: "i" };
+    // "served" = most-answered first, so the questions most students see are reviewed first.
+    const sort: Record<string, 1 | -1> = req.query.sort === "served" ? { "stats.answered": -1, createdAt: -1 } : { createdAt: -1 };
     const [items, total] = await Promise.all([
-      Question.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Question.find(filter).sort(sort).skip(skip).limit(limit).lean(),
       Question.countDocuments(filter),
     ]);
     sendList(res, items, page, limit, total);
@@ -533,6 +541,10 @@ adminRouter.patch(
       difficulty: body.difficulty ?? question.difficulty,
       status: body.status ?? question.status,
     });
+    if (body.status === "published" || body.status === "rejected" || contentChanging) {
+      // An admin decision overrides the AI check and clears student-report / wrong-key flags.
+      question.set({ reviewedBy: req.user!.id, flagged: false, flagReason: "" });
+    }
     if (body.options || body.correctKey) {
       const keys = question.options.map((option: { key: string }) => option.key);
       if (!keys.includes(question.correctKey)) throw new HttpError(400, "correctKey must match an option", "BAD_REQUEST");
@@ -683,7 +695,7 @@ adminRouter.get(
   "/approvals",
   wrap(async (_req, res) => {
     const [questions, subjects, topics, sources, papers] = await Promise.all([
-      Question.find({ status: "under_review" }).sort({ createdAt: 1 }).limit(30).lean(),
+      Question.find({ $or: [{ status: "under_review" }, { flagged: true }] }).sort({ flagged: -1, "stats.answered": -1, createdAt: 1 }).limit(30).lean(),
       Subject.find({ status: "validation" }).limit(30).lean(),
       Topic.find({ status: "validation" }).limit(30).lean(),
       KnowledgeSource.find({ status: { $in: ["draft", "under_review"] } }).limit(30).lean(),
@@ -691,7 +703,15 @@ adminRouter.get(
     ]);
     res.json({
       data: [
-        ...questions.map((item) => ({ type: "question", id: item.id, title: item.stem.slice(0, 120), status: item.status })),
+        ...questions.map((item) => ({
+          type: "question",
+          id: item.id,
+          title: item.stem.slice(0, 120),
+          status: item.flagged ? "flagged" : item.status,
+          note: item.flagReason || "",
+          answered: item.stats?.answered || 0,
+          reports: item.reportCount || 0,
+        })),
         ...subjects.map((item) => ({ type: "subject", id: item.id, title: item.nameEn || item.name, status: item.status })),
         ...topics.map((item) => ({ type: "topic", id: item.id, title: item.nameEn || item.name, status: item.status })),
         ...sources.map((item) => ({ type: "source", id: item.id, title: item.title, status: item.status })),
@@ -708,7 +728,11 @@ adminRouter.post(
     const { type, id } = req.params;
     if (type === "question") {
       const status = decision === "approve" ? "published" : "rejected";
-      const item = await Question.findOneAndUpdate({ id }, { status }, { new: true }).lean();
+      const item = await Question.findOneAndUpdate(
+        { id },
+        { $set: { status, reviewedBy: req.user!.id, flagged: false, flagReason: "" } },
+        { new: true },
+      ).lean();
       if (!item) throw new HttpError(404, "Question not found", "NOT_FOUND");
     } else if (type === "subject") {
       const status = decision === "approve" ? "published" : "draft";
@@ -1100,8 +1124,11 @@ adminRouter.get(
       AiUsage.aggregate([{ $group: { _id: null, inr: { $sum: "$estimatedInr" }, requests: { $sum: 1 } } }]),
     ]);
     const settings = await AppConfig.findOne({ id: "app" }).lean();
+    const [storage, pool] = await Promise.all([databaseUsage(), questionPool()]);
     res.json({
       data: {
+        storage,
+        questionPool: pool,
         activeStudents: students,
         practiceSessions: sessions,
         completedPractice: attemptsReady,
@@ -1115,6 +1142,46 @@ adminRouter.get(
     });
   }),
 );
+
+/** Database size against the plan limit (DB_LIMIT_MB, default the 512 MB Atlas free tier). */
+async function databaseUsage() {
+  const limitMb = Number(process.env.DB_LIMIT_MB || 512);
+  const stats = await mongoose.connection.db!.command({ dbStats: 1, scale: 1024 * 1024 });
+  const usedMb = Number(stats.dataSize || 0) + Number(stats.indexSize || 0);
+  const percent = limitMb ? Math.round((usedMb / limitMb) * 100) : 0;
+  return {
+    usedMb: Math.round(usedMb * 10) / 10,
+    dataMb: Math.round(Number(stats.dataSize || 0) * 10) / 10,
+    indexMb: Math.round(Number(stats.indexSize || 0) * 10) / 10,
+    limitMb,
+    percent,
+    warning: percent >= 80 ? `Database is ${percent}% full. Clean up or upgrade the plan.` : "",
+  };
+}
+
+/** Shared question pool per exam: published (auto / admin), awaiting review, flagged. */
+async function questionPool() {
+  const rows = await Question.aggregate<{ _id: { examId: string; state: string }; n: number }>([
+    {
+      $group: {
+        _id: {
+          examId: "$examId",
+          state: { $cond: [{ $eq: ["$flagged", true] }, "flagged", { $cond: [{ $eq: ["$status", "published"] }, { $cond: [{ $eq: ["$reviewedBy", "auto"] }, "auto", "approved"] }, "$status"] }] },
+        },
+        n: { $sum: 1 },
+      },
+    },
+  ]);
+  const exams = await Exam.find({ id: { $in: [...new Set(rows.map((row) => row._id.examId))] } }).select("id name").lean();
+  const name = new Map(exams.map((exam) => [exam.id, exam.name]));
+  const byExam = new Map<string, Record<string, number>>();
+  for (const row of rows) {
+    const counts = byExam.get(row._id.examId) || {};
+    counts[row._id.state] = row.n;
+    byExam.set(row._id.examId, counts);
+  }
+  return [...byExam.entries()].map(([examId, counts]) => ({ examId, exam: name.get(examId) || examId, ...counts }));
+}
 
 adminRouter.post(
   "/jobs/daily-mocks",

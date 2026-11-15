@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { apportion, canTransitionExam, escapeRegex, nextIstRun, planMockSections, planSyllabusMerge, stemKey } from "./governance.js";
+import { apportion, canTransitionExam, escapeRegex, nextIstRun, planMockSections, planSyllabusMerge, stemKey, topicLevelProgress, unlockHint } from "./governance.js";
 
 test("stemKey treats case, punctuation and spacing changes as the same question", () => {
   assert.equal(stemKey("Which Article guarantees equality?"), stemKey("which  article guarantees EQUALITY"));
@@ -112,4 +112,42 @@ test("planMockSections spreads unmatched sections and handles no sections or a c
     { name: "General Tamil", subjectId: "tam", target: 63 },
     { name: "Aptitude", subjectId: "apt", target: 62 },
   ]);
+});
+
+test("topicLevelProgress unlocks Easy → Medium → Hard by pass marks", () => {
+  const fresh = topicLevelProgress({});
+  assert.equal(fresh.current, "easy");
+  assert.equal(fresh.levels.easy.unlocked, true);
+  assert.equal(fresh.levels.medium.unlocked, false);
+  assert.equal(fresh.step, 0);
+
+  // 9 answers is below the minimum even at 100%.
+  assert.equal(topicLevelProgress({ easy: Array(9).fill(true) }).levels.medium.unlocked, false);
+  // 10 answers at 80% passes Easy.
+  const easyDone = topicLevelProgress({ easy: [...Array(8).fill(true), false, false] });
+  assert.equal(easyDone.levels.easy.passed, true);
+  assert.equal(easyDone.levels.medium.unlocked, true);
+  assert.equal(easyDone.current, "medium");
+  assert.equal(easyDone.percent, 33);
+  // 70% at Easy is not enough.
+  assert.equal(topicLevelProgress({ easy: [...Array(7).fill(true), false, false, false] }).levels.easy.passed, false);
+
+  // Hard answers do not count until Hard is unlocked.
+  assert.equal(topicLevelProgress({ hard: Array(10).fill(true) }).mastered, false);
+
+  const all = topicLevelProgress({ easy: Array(10).fill(true), medium: [...Array(7).fill(true), false, false, false], hard: [...Array(6).fill(true), false, false, false, false] });
+  assert.equal(all.mastered, true);
+  assert.equal(all.step, 3);
+  assert.equal(all.current, "hard");
+});
+
+test("a passed level stays passed and recent answers can recover a weak start", () => {
+  // Passed early, then slipped: stays unlocked.
+  const slipped = topicLevelProgress({ easy: [...Array(10).fill(true), ...Array(10).fill(false)] });
+  assert.equal(slipped.levels.easy.passed, true);
+  assert.equal(slipped.levels.easy.accuracy, 50);
+  // Weak start, strong recent run within the 20-answer window: passes.
+  const recovered = topicLevelProgress({ easy: [...Array(10).fill(false), ...Array(20).fill(true)] });
+  assert.equal(recovered.levels.easy.passed, true);
+  assert.equal(unlockHint("medium").includes("80%"), true);
 });

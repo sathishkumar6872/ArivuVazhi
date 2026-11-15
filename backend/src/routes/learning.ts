@@ -4,13 +4,14 @@ import { requireAuth } from "../auth.js";
 import { detectStudentLanguage, transcribeAudio, tutorReply } from "../ai.js";
 import { assertAiBudgetAvailable, estimateAiInr } from "../ai-budget.js";
 import { dayKey, HttpError, nid, wrap } from "../http.js";
-import { ensurePracticeQuestions, visibleToStudent } from "../question-ai.js";
+import { ensurePracticeQuestions, recordAnswerStats, recordSeen, visibleToStudent } from "../question-ai.js";
 import { DAILY_SET_STALE_MS, generateDailyMockSet, generatingAgeMs, studentDailyMocks } from "../daily-mock.js";
 
 /** After a failure, wait this long before a mock start triggers a fresh attempt (avoids hammering a broken provider). */
 const MOCK_RETRY_AFTER_MS = 10 * 60 * 1000;
 import { scoreAttempt } from "../scoring.js";
-import { escapeRegex } from "../governance.js";
+import { escapeRegex, unlockHint, type PracticeLevel } from "../governance.js";
+import { NO_PROGRESS, topicProgress } from "../practice-progress.js";
 import {
   AiUsage,
   AppConfig,
@@ -23,6 +24,7 @@ import {
   PracticeSession,
   PyqPaper,
   Question,
+  QuestionReport,
   SyncReceipt,
   Topic,
   User,
@@ -68,6 +70,25 @@ function visibleQuestion(question: { id: string; stem: string; options: unknown;
   };
 }
 
+/** Errors a student can act on pass through; AI/provider internals become a friendly retry message. */
+function friendlyPracticeError(error: unknown): never {
+  if (error instanceof HttpError) {
+    if (["LEVEL_LOCKED", "NOT_FOUND", "FORBIDDEN", "BAD_REQUEST", "NO_QUESTIONS", "NOTHING_TO_RETRY"].includes(error.code)) throw error;
+    if (error.code === "SYLLABUS_EMPTY") throw new HttpError(404, "Topics for this exam are not ready yet. Please check back soon.", "SYLLABUS_EMPTY");
+  }
+  console.warn(`Practice could not be prepared: ${error instanceof Error ? error.message : error}`);
+  throw new HttpError(503, "We couldn't prepare questions right now. Please try again in a minute.", "PRACTICE_UNAVAILABLE");
+}
+
+const LEVEL_NAMES: Record<PracticeLevel, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
+
+async function topicNames(ids: string[], language: "en" | "ta") {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return new Map<string, string>();
+  const topics = await Topic.find({ id: { $in: unique } }).select("id name nameEn nameTa").lean();
+  return new Map(topics.map((topic) => [topic.id, (language === "ta" ? topic.nameTa : topic.nameEn) || topic.name]));
+}
+
 learningRouter.post(
   "/practice/sessions",
   wrap(async (req, res) => {
@@ -77,36 +98,115 @@ learningRouter.post(
         topicId: z.string().optional(),
         difficulty: z.enum(["easy", "medium", "hard"]).optional(),
         count: z.number().int().min(1).max(20).optional(),
+        /** Re-practise the wrong answers of this earlier set. */
+        retryOf: z.string().optional(),
       })
       .parse(req.body);
+    const me = studentId(req);
+
+    if (body.retryOf) {
+      const original = await PracticeSession.findOne({ id: body.retryOf, studentId: me }).lean();
+      if (!original) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
+      const wrong = original.answers.filter((answer) => !answer.correct).map((answer) => answer.questionId);
+      if (!wrong.length) throw new HttpError(400, "No wrong answers to retry in this set.", "NOTHING_TO_RETRY");
+      const rows = await Question.find({ id: { $in: wrong }, ...visibleToStudent(me) }).lean();
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const questions = wrong.map((id) => byId.get(id)).filter(Boolean) as typeof rows;
+      const session = await PracticeSession.create({
+        id: nid(),
+        studentId: me,
+        examId: original.examId,
+        topicId: original.topicId,
+        difficulty: original.difficulty,
+        kind: "retry",
+        retryOf: original.id,
+        questionIds: questions.map((question) => question.id),
+      });
+      return res.status(201).json({
+        data: { id: session.id, status: session.status, kind: "retry", topicId: session.topicId, difficulty: session.difficulty, generated: false, repeated: 0, progress: null, questions: questions.map((question) => visibleQuestion(question)) },
+      });
+    }
+
+    // Levels open topic by topic: Easy always, Medium after Easy is passed, Hard after Medium.
+    const progress = await topicProgress(me, body.examId);
+    // Without a topic or level, quick practice is Easy (open everywhere), so no level is skipped.
+    let difficulty = body.difficulty || (body.topicId ? undefined : "easy");
+    let topicIds: string[] | undefined;
+    if (body.topicId) {
+      const topic = progress.get(body.topicId) || NO_PROGRESS;
+      difficulty ||= topic.current;
+      if (!topic.levels[difficulty].unlocked) throw new HttpError(403, unlockHint(difficulty), "LEVEL_LOCKED");
+    } else if (difficulty && difficulty !== "easy") {
+      const level = difficulty;
+      const topics = await Topic.find({ examId: body.examId, status: "published" }).select("id").lean();
+      topicIds = topics.map((topic) => topic.id).filter((id) => (progress.get(id) || NO_PROGRESS).levels[level].unlocked);
+      if (!topicIds.length) {
+        throw new HttpError(403, `${LEVEL_NAMES[level]} opens topic by topic. ${unlockHint(level)}`, "LEVEL_LOCKED");
+      }
+    }
+
+    // Starting a new set closes any unfinished one; its unanswered questions become free again.
+    await PracticeSession.updateMany({ studentId: me, examId: body.examId, status: "active" }, { $set: { status: "abandoned", completedAt: new Date() } });
     const count = body.count || 5;
-    const prepared = await ensurePracticeQuestions({
-      studentId: studentId(req),
-      examId: body.examId,
-      topicId: body.topicId,
-      difficulty: body.difficulty,
-      count,
-    });
+    let prepared;
+    try {
+      prepared = await ensurePracticeQuestions({ studentId: me, examId: body.examId, topicId: body.topicId, topicIds, difficulty, count });
+    } catch (error) {
+      friendlyPracticeError(error);
+    }
     const session = await PracticeSession.create({
       id: nid(),
-      studentId: studentId(req),
+      studentId: me,
       examId: body.examId,
       topicId: body.topicId || "",
-      difficulty: body.difficulty || "",
+      difficulty: difficulty || "",
       questionIds: prepared.questions.map((question) => question.id),
     });
     res.status(201).json({
       data: {
         id: session.id,
         status: session.status,
+        kind: "practice",
+        topicId: session.topicId,
+        difficulty: session.difficulty,
         generated: prepared.generatedLive > 0,
         repeated: prepared.repeated,
+        progress: body.topicId ? progress.get(body.topicId) || NO_PROGRESS : null,
         questions: prepared.questions.map((question) => visibleQuestion(question)),
       },
     });
   }),
 );
 
+/** The unfinished set to offer as "Continue practice", if any. */
+learningRouter.get(
+  "/practice/active",
+  wrap(async (req, res) => {
+    const filter: Record<string, unknown> = { studentId: studentId(req), status: "active" };
+    if (typeof req.query.examId === "string") filter.examId = req.query.examId;
+    const session = await PracticeSession.findOne(filter).sort({ createdAt: -1 }).lean();
+    if (!session || session.answers.length >= session.questionIds.length) return res.json({ data: null });
+    const names = await topicNames([session.topicId], req.user!.language === "ta" ? "ta" : "en");
+    res.json({
+      data: {
+        id: session.id,
+        examId: session.examId,
+        kind: session.kind || "practice",
+        topicId: session.topicId,
+        topicName: names.get(session.topicId) || "",
+        difficulty: session.difficulty,
+        answered: session.answers.length,
+        total: session.questionIds.length,
+      },
+    });
+  }),
+);
+
+/**
+ * A set with its questions in order. Answered questions carry the student's answer,
+ * the correct answer and the explanation (for resume and the result review);
+ * unanswered ones stay hidden so they can be served again later.
+ */
 learningRouter.get(
   "/practice/sessions/:id",
   wrap(async (req, res) => {
@@ -114,18 +214,41 @@ learningRouter.get(
     if (!session) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
     const questions = await Question.find({ id: { $in: session.questionIds } }).lean();
     const byId = new Map(questions.map((question) => [question.id, question]));
+    const answerFor = new Map(session.answers.map((answer) => [answer.questionId, answer]));
+    const correctCount = session.answers.filter((answer) => answer.correct).length;
+    const answered = session.answers.length;
+    // Weakest topic of this set: the one with the most wrong answers, when accuracy is low.
+    const wrongByTopic = new Map<string, number>();
+    for (const answer of session.answers) {
+      const topicId = byId.get(answer.questionId)?.topicId;
+      if (!answer.correct && topicId) wrongByTopic.set(topicId, (wrongByTopic.get(topicId) || 0) + 1);
+    }
+    const weakTopicId = answered && correctCount / answered < 0.7 ? [...wrongByTopic.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "" : "";
+    const names = await topicNames([session.topicId, weakTopicId], req.user!.language === "ta" ? "ta" : "en");
     res.json({
       data: {
         id: session.id,
         status: session.status,
+        kind: session.kind || "practice",
         examId: session.examId,
-        answers: session.answers,
-        questions: session.questionIds.map((id) => {
-          const question = byId.get(id);
-          if (!question) return null;
-          const answered = session.answers.find((answer) => answer.questionId === id);
-          return visibleQuestion(question, Boolean(answered), question);
-        }).filter(Boolean),
+        topicId: session.topicId,
+        topicName: names.get(session.topicId) || "",
+        difficulty: session.difficulty,
+        answered,
+        correct: correctCount,
+        total: session.questionIds.length,
+        weakTopic: weakTopicId ? { id: weakTopicId, name: names.get(weakTopicId) || "" } : null,
+        questions: session.questionIds
+          .map((id) => {
+            const question = byId.get(id);
+            if (!question) return null;
+            const answer = answerFor.get(id);
+            return {
+              ...visibleQuestion(question, Boolean(answer), question),
+              ...(answer ? { yourAnswer: answer.selectedKey, correct: Boolean(answer.correct) } : {}),
+            };
+          })
+          .filter(Boolean),
       },
     });
   }),
@@ -137,28 +260,25 @@ learningRouter.post(
     const body = z.object({ questionId: z.string(), selectedKey: z.string().min(1).max(2) }).parse(req.body);
     const session = await PracticeSession.findOne({ id: req.params.id, studentId: studentId(req) });
     if (!session) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
-    if (session.status !== "active") throw new HttpError(409, "This practice session is already complete", "CONFLICT");
     if (!session.questionIds.includes(body.questionId)) throw new HttpError(400, "Question is not part of this session", "BAD_REQUEST");
     const question = await Question.findOne({ id: body.questionId, ...visibleToStudent(studentId(req)) });
     if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
-    const correct = question.correctKey === body.selectedKey;
+    // The first answer is final: once the correct answer has been shown it cannot be changed.
     const existing = session.answers.find((answer) => answer.questionId === body.questionId);
     if (existing) {
-      existing.selectedKey = body.selectedKey;
-      existing.correct = correct;
-      existing.answeredAt = new Date();
-    } else {
-      session.answers.push({ questionId: body.questionId, selectedKey: body.selectedKey, correct, answeredAt: new Date(), markedForReview: false });
+      return res.json({
+        data: { questionId: question.id, selectedKey: existing.selectedKey, correct: Boolean(existing.correct), correctKey: question.correctKey, explanation: question.explanation, alreadyAnswered: true },
+      });
     }
+    if (session.status !== "active") throw new HttpError(409, "This practice session is already complete", "CONFLICT");
+    const correct = question.correctKey === body.selectedKey;
+    session.answers.push({ questionId: body.questionId, selectedKey: body.selectedKey, correct, answeredAt: new Date(), markedForReview: false });
     await session.save();
+    await recordSeen(studentId(req), session.examId, [question.id], "practice");
+    // Retries re-answer known questions, so only first-time answers feed the wrong-key signal.
+    if (session.kind !== "retry") void recordAnswerStats(question.id, correct).catch(() => undefined);
     res.json({
-      data: {
-        questionId: question.id,
-        selectedKey: body.selectedKey,
-        correct,
-        correctKey: question.correctKey,
-        explanation: question.explanation,
-      },
+      data: { questionId: question.id, selectedKey: body.selectedKey, correct, correctKey: question.correctKey, explanation: question.explanation, alreadyAnswered: false },
     });
   }),
 );
@@ -166,13 +286,56 @@ learningRouter.post(
 learningRouter.post(
   "/practice/sessions/:id/complete",
   wrap(async (req, res) => {
-    const session = await PracticeSession.findOne({ id: req.params.id, studentId: studentId(req) });
+    const me = studentId(req);
+    const session = await PracticeSession.findOne({ id: req.params.id, studentId: me });
     if (!session) throw new HttpError(404, "Practice session not found", "NOT_FOUND");
-    session.status = "completed";
-    session.completedAt = new Date();
-    await session.save();
+    if (session.status === "active") {
+      session.status = "completed";
+      session.completedAt = new Date();
+      await session.save();
+    }
     const correct = session.answers.filter((answer) => answer.correct).length;
-    res.json({ data: { id: session.id, status: session.status, correct, answered: session.answers.length, total: session.questionIds.length } });
+    // Level standing of the topics practised in this set, for the result screen.
+    const answeredIds = session.answers.map((answer) => answer.questionId);
+    const topicIds = [...new Set((await Question.find({ id: { $in: answeredIds } }).select("topicId").lean()).map((row) => row.topicId))];
+    const [progress, names] = await Promise.all([topicProgress(me, session.examId), topicNames(topicIds, req.user!.language === "ta" ? "ta" : "en")]);
+    res.json({
+      data: {
+        id: session.id,
+        status: session.status,
+        kind: session.kind || "practice",
+        correct,
+        answered: session.answers.length,
+        total: session.questionIds.length,
+        topics: topicIds.map((topicId) => ({ topicId, name: names.get(topicId) || "", ...(progress.get(topicId) || NO_PROGRESS) })),
+      },
+    });
+  }),
+);
+
+/** Reports needed before a question is hidden from everyone pending admin review. */
+const REPORTS_TO_HIDE = 3;
+
+learningRouter.post(
+  "/questions/:id/report",
+  wrap(async (req, res) => {
+    const body = z.object({ reason: z.enum(["wrong_answer", "unclear", "other"]), note: z.string().max(500).optional() }).parse(req.body);
+    const me = studentId(req);
+    // Flagged questions can still be reported (they were visible when the student saw them).
+    const question = await Question.findOne({ id: req.params.id, $or: visibleToStudent(me).$or }).select("id reportCount flagged reviewedBy").lean();
+    if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
+    try {
+      await QuestionReport.create({ id: nid(), questionId: question.id, studentId: me, reason: body.reason, note: body.note || "" });
+    } catch (error) {
+      // One report per student per question.
+      if ((error as { code?: number }).code === 11000) return res.json({ data: { reported: true, alreadyReported: true } });
+      throw error;
+    }
+    const updated = await Question.findOneAndUpdate({ id: question.id }, { $inc: { reportCount: 1 } }, { new: true }).lean();
+    if (updated && !updated.flagged && (updated.reportCount || 0) >= REPORTS_TO_HIDE) {
+      await Question.updateOne({ id: question.id }, { $set: { flagged: true, flagReason: `${updated.reportCount} student reports` } });
+    }
+    res.status(201).json({ data: { reported: true, alreadyReported: false } });
   }),
 );
 
@@ -180,11 +343,16 @@ learningRouter.get(
   "/practice/history",
   wrap(async (req, res) => {
     const sessions = await PracticeSession.find({ studentId: studentId(req) }).sort({ createdAt: -1 }).limit(30).lean();
+    const names = await topicNames(sessions.map((session) => session.topicId), req.user!.language === "ta" ? "ta" : "en");
     res.json({
       data: sessions.map((session) => ({
         id: session.id,
         examId: session.examId,
         status: session.status,
+        kind: session.kind || "practice",
+        topicId: session.topicId,
+        topicName: names.get(session.topicId) || "",
+        difficulty: session.difficulty,
         total: session.questionIds.length,
         answered: session.answers.length,
         correct: session.answers.filter((answer) => answer.correct).length,
@@ -852,25 +1020,27 @@ learningRouter.post(
         skipped.push(item.questionId);
         continue;
       }
-      const correct = question.correctKey === item.selectedKey;
-      const existing = session.answers.find((answer) => answer.questionId === question.id);
-      if (existing) {
-        existing.selectedKey = item.selectedKey;
-        existing.correct = correct;
-        existing.answeredAt = new Date();
-      } else {
-        session.answers.push({ questionId: question.id, selectedKey: item.selectedKey, correct, answeredAt: new Date(), markedForReview: false });
+      // The first answer is final, offline as online.
+      if (session.answers.some((answer) => answer.questionId === question.id)) {
+        skipped.push(item.questionId);
+        continue;
       }
+      const correct = question.correctKey === item.selectedKey;
+      session.answers.push({ questionId: question.id, selectedKey: item.selectedKey, correct, answeredAt: new Date(), markedForReview: false });
       await session.save();
+      await recordSeen(studentId(req), session.examId, [question.id], "practice");
+      if (session.kind !== "retry") void recordAnswerStats(question.id, correct).catch(() => undefined);
       applied.push(question.id);
     }
     let completed = 0;
     for (const sessionId of body.completeSessionIds) {
       const session = await PracticeSession.findOne({ id: sessionId, studentId: studentId(req) });
       if (!session) continue;
-      session.status = "completed";
-      session.completedAt = new Date();
-      await session.save();
+      if (session.status === "active") {
+        session.status = "completed";
+        session.completedAt = new Date();
+        await session.save();
+      }
       completed += 1;
     }
     const response = { data: { applied: applied.length, skipped: skipped.length, completed, serverAuthoritative: true } };
