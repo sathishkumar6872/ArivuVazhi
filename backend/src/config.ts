@@ -48,6 +48,8 @@ export const config = {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean),
+  /** Public base URL of this API (OAuth redirect URIs). Set PUBLIC_API_URL on Render. */
+  publicApiUrl: (process.env.PUBLIC_API_URL || `http://localhost:${Number(process.env.PORT || 4000)}`).replace(/\/+$/, ""),
   adminPortalUrl:
     process.env.ADMIN_PORTAL_URL ||
     (process.env.CORS_ORIGINS || "http://localhost:3000,http://localhost:3001")

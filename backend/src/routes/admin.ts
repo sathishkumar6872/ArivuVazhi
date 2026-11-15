@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import express, { Router } from "express";
+import { Router } from "express";
 import { z } from "zod";
 import { audit, requireAuth, requireRole } from "../auth.js";
 import { HttpError, nid, pageQuery, sendList, wrap } from "../http.js";
@@ -35,7 +35,6 @@ import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
 import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
-import { applyAnswerKey, fileMeta, importPyqPaper, pdfText, publishPyqPaper } from "../pyq-import.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireRole("admin", "reviewer"));
@@ -500,6 +499,10 @@ adminRouter.patch(
         correctKey: z.string().optional(),
         explanation: z.string().optional(),
         difficulty: z.enum(["easy", "medium", "hard"]).optional(),
+        subjectId: z.string().min(1).optional(),
+        topicId: z.string().min(1).optional(),
+        subtopic: z.string().max(120).optional(),
+        questionType: z.string().max(40).optional(),
         status: z.enum(["draft", "under_review", "published", "rejected", "retired"]).optional(),
         changeReason: z.string().min(8).max(500).optional(),
         oldAnswerMistake: z.string().min(8).max(1000).optional(),
@@ -508,6 +511,18 @@ adminRouter.patch(
       .parse(req.body);
     const question = await Question.findOne({ id: req.params.id });
     if (!question) throw new HttpError(404, "Question not found", "NOT_FOUND");
+    // Classification edits (subject/topic) must point at this exam's syllabus.
+    if (body.topicId !== undefined) {
+      const topic = await Topic.findOne({ id: body.topicId }).lean();
+      if (!topic) throw new HttpError(400, "Unknown topic", "BAD_REQUEST");
+      if (body.subjectId && body.subjectId !== topic.subjectId) throw new HttpError(400, "Topic is not in this subject", "BAD_REQUEST");
+      body.subjectId = topic.subjectId;
+    }
+    if (body.subjectId !== undefined) {
+      const subject = await Subject.findOne({ id: body.subjectId }).lean();
+      if (!subject || subject.examId !== question.examId) throw new HttpError(400, "Unknown subject for this exam", "BAD_REQUEST");
+      if (body.topicId === undefined && body.subjectId !== question.subjectId) body.topicId = "unmapped";
+    }
     const contentChanging =
       body.stem !== undefined ||
       body.options !== undefined ||
@@ -541,12 +556,18 @@ adminRouter.patch(
       correctKey: body.correctKey ?? question.correctKey,
       explanation: body.explanation ?? question.explanation,
       difficulty: body.difficulty ?? question.difficulty,
+      subjectId: body.subjectId ?? question.subjectId,
+      topicId: body.topicId ?? question.topicId,
+      subtopic: body.subtopic ?? question.subtopic,
+      questionType: body.questionType ?? question.questionType,
       status: body.status ?? question.status,
     });
     if (body.status === "published" || body.status === "rejected" || contentChanging) {
       // An admin decision overrides the AI check and clears student-report / wrong-key flags.
       question.set({ reviewedBy: req.user!.id, flagged: false, flagReason: "" });
     }
+    // An answer set by hand is an admin answer, never an "official" one.
+    if (body.correctKey !== undefined && body.correctKey !== before.correctKey) question.set({ keyStatus: "admin" });
     if (body.options || body.correctKey) {
       const keys = question.options.map((option: { key: string }) => option.key);
       if (!keys.includes(question.correctKey)) throw new HttpError(400, "correctKey must match an option", "BAD_REQUEST");
@@ -588,159 +609,7 @@ adminRouter.get(
   }),
 );
 
-adminRouter.get(
-  "/pyq",
-  wrap(async (_req, res) => {
-    const papers = await PyqPaper.find().sort({ year: -1 }).lean();
-    res.json({ data: papers });
-  }),
-);
-
-adminRouter.post(
-  "/pyq",
-  wrap(async (req, res) => {
-    const body = z
-      .object({
-        examId: z.string(),
-        title: z.string().min(2),
-        year: z.number().int(),
-        sourceName: z.string().min(2),
-        questionIds: z.array(z.string()).default([]),
-        note: z.string().optional().default(""),
-        rightsStatus: z.enum(["pending", "verified", "rejected"]).optional(),
-      })
-      .parse(req.body);
-    const paper = await PyqPaper.create({
-      id: nid(),
-      status: "under_review",
-      rightsStatus: body.rightsStatus || "pending",
-      ...body,
-    });
-    await audit(req.user!.id, "pyq_create", "pyq", paper.id);
-    res.status(201).json({ data: paper });
-  }),
-);
-
-/** Raw PDF uploads (application/pdf body), up to 25 MB. */
-const pdfBody = express.raw({ type: "application/pdf", limit: "25mb" });
-
-/**
- * Upload an official question paper PDF. The paper is created at once; AI extracts the
- * questions in the background (poll GET /pyq/:id). Nothing reaches students until the
- * rights are verified and the paper is published.
- */
-adminRouter.post(
-  "/pyq/import",
-  pdfBody,
-  wrap(async (req, res) => {
-    const query = z
-      .object({
-        examId: z.string().min(8),
-        year: z.coerce.number().int().min(1990).max(2100),
-        title: z.string().min(2).max(200),
-        sourceName: z.string().min(2).max(200),
-        sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
-        fileName: z.string().max(200).optional(),
-      })
-      .parse(req.query);
-    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    await pdfText(buffer); // validate before creating anything
-    if (!(await Exam.exists({ id: query.examId }))) throw new HttpError(404, "Exam not found", "NOT_FOUND");
-    const paper = await PyqPaper.create({
-      id: nid(),
-      examId: query.examId,
-      title: query.title,
-      year: query.year,
-      sourceName: query.sourceName,
-      sourceUrl: query.sourceUrl || "",
-      status: "under_review",
-      rightsStatus: "pending",
-      generationSource: "import",
-      files: [fileMeta("questions", query.fileName || "question-paper.pdf", buffer)],
-    });
-    await audit(req.user!.id, "pyq_import", "pyq", paper.id, { examId: query.examId, year: query.year, bytes: buffer.length });
-    void importPyqPaper(paper.id, buffer).catch((error) => console.warn(`PYQ import ${paper.id} failed: ${error instanceof Error ? error.message : error}`));
-    res.status(202).json({ data: { id: paper.id, extraction: { status: "processing" } } });
-  }),
-);
-
-/** Re-run extraction on a new copy of the paper (replaces its unpublished questions). */
-adminRouter.post(
-  "/pyq/:id/reimport",
-  pdfBody,
-  wrap(async (req, res) => {
-    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    await pdfText(buffer);
-    const paper = await PyqPaper.findOne({ id: req.params.id });
-    if (!paper) throw new HttpError(404, "PYQ paper not found", "NOT_FOUND");
-    paper.files = [...paper.files.filter((file) => file.kind !== "questions"), fileMeta("questions", String(req.query.fileName || "question-paper.pdf"), buffer)] as never;
-    await paper.save();
-    await audit(req.user!.id, "pyq_reimport", "pyq", paper.id);
-    void importPyqPaper(paper.id, buffer).catch((error) => console.warn(`PYQ re-import ${paper.id} failed: ${error instanceof Error ? error.message : error}`));
-    res.status(202).json({ data: { id: paper.id, extraction: { status: "processing" } } });
-  }),
-);
-
-/** Upload the official answer key PDF and apply it to the extracted questions. */
-adminRouter.post(
-  "/pyq/:id/answer-key",
-  pdfBody,
-  wrap(async (req, res) => {
-    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const result = await applyAnswerKey(req.params.id, buffer);
-    await PyqPaper.updateOne(
-      { id: req.params.id },
-      { $push: { files: fileMeta("answers", String(req.query.fileName || "answer-key.pdf"), buffer) } },
-    );
-    await audit(req.user!.id, "pyq_answer_key", "pyq", req.params.id, result);
-    res.json({ data: result });
-  }),
-);
-
-/** One paper with its extracted questions (answer keys included, admin only). */
-adminRouter.get(
-  "/pyq/:id",
-  wrap(async (req, res) => {
-    const paper = await PyqPaper.findOne({ id: req.params.id }).lean();
-    if (!paper) throw new HttpError(404, "PYQ paper not found", "NOT_FOUND");
-    const questions = await Question.find({ pyqPaperId: paper.id }).sort({ pyqNumber: 1 }).lean();
-    res.json({ data: { ...paper, questions } });
-  }),
-);
-
-adminRouter.post(
-  "/pyq/:id/publish",
-  wrap(async (req, res) => {
-    const result = await publishPyqPaper(req.params.id, req.user!.id);
-    await audit(req.user!.id, "pyq_publish", "pyq", req.params.id, result);
-    res.json({ data: result });
-  }),
-);
-
-adminRouter.patch(
-  "/pyq/:id",
-  wrap(async (req, res) => {
-    const body = z
-      .object({
-        rightsStatus: z.enum(["pending", "verified", "rejected"]).optional(),
-        status: z.enum(["draft", "under_review", "published", "rejected"]).optional(),
-        note: z.string().optional(),
-      })
-      .parse(req.body);
-    if (body.status === "published" && body.rightsStatus && body.rightsStatus !== "verified") {
-      throw new HttpError(400, "PYQ can be published only after rights are verified", "BAD_REQUEST");
-    }
-    const existing = await PyqPaper.findOne({ id: req.params.id });
-    if (!existing) throw new HttpError(404, "PYQ paper not found", "NOT_FOUND");
-    if (body.status === "published" && (body.rightsStatus || existing.rightsStatus) !== "verified") {
-      throw new HttpError(400, "PYQ can be published only after rights are verified", "BAD_REQUEST");
-    }
-    Object.assign(existing, body);
-    await existing.save();
-    await audit(req.user!.id, "pyq_update", "pyq", existing.id, body);
-    res.json({ data: existing });
-  }),
-);
+// PYQ management lives in routes/pyq-admin.ts (/api/v1/admin/pyq/...).
 
 adminRouter.get(
   "/mocks",

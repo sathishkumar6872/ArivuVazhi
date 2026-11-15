@@ -572,7 +572,7 @@ type ChatGptResponseInput =
       role: "user" | "assistant" | "developer";
       content:
         | string
-        | Array<{ type: string; text?: string; image_url?: string }>;
+        | Array<{ type: string; text?: string; image_url?: string; filename?: string; file_data?: string }>;
     }>;
 
 export type ChatGptCompletion = {

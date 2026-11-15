@@ -647,9 +647,17 @@ export async function recordAnswerStats(questionId: string, correct: boolean) {
  * One AI call that must return JSON: budget check, provider choice, timeout and
  * usage logging in one place (used by PYQ import and pattern analysis).
  */
-export async function completeAiJson(input: { system: string; user: string; feature: string; label: string; userId?: string }) {
+export async function completeAiJson(input: { system: string; user: string; feature: string; label: string; userId?: string; provider?: "auto" | "chatgpt" | "gemini" }) {
   await assertAiBudgetAvailable(input.label);
-  const provider = await resolveProvider();
+  let provider = await resolveProvider();
+  if (input.provider === "chatgpt" || input.provider === "gemini") {
+    // A specific provider was chosen: use it only if it is switched on.
+    const settings = await AppConfig.findOne({ id: "app" }).lean();
+    const enabled = input.provider === "chatgpt" ? settings?.chatgptEnabled ?? settings?.aiProvider === "chatgpt" : settings?.geminiEnabled ?? settings?.aiProvider === "gemini";
+    const name = input.provider === "chatgpt" ? "ChatGPT" : "Gemini";
+    if (!enabled) throw new HttpError(503, `${name} is not enabled. Turn it on in AI providers, or choose another provider.`, "AI_UNAVAILABLE");
+    provider = input.provider;
+  }
   if (provider === "local") throw new HttpError(503, "Enable ChatGPT or Gemini in AI providers first.", "AI_UNAVAILABLE");
   const raw = await withTimeout(completeRaw(input.system, input.user, provider), input.label);
   const tokens = Math.ceil((input.system.length + input.user.length + raw.length) / 4);

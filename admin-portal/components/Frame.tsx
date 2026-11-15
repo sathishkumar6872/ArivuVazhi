@@ -16,11 +16,12 @@ const links = [
   ["/syllabus", "Syllabus history"],
   ["/questions", "Question bank"],
   ["/approvals", "Approvals"],
-  ["/pyq", "PYQ monitor"],
+  ["/pyq", "PYQ management"],
   ["/ai", "AI providers"],
   ["/support", "Feedback"],
   ["/notifications", "Notifications"],
   ["/operations", "Operations"],
+  ["/storage", "Settings · Storage"],
 ];
 
 export function AdminFrame({ children }: { children: React.ReactNode }) {

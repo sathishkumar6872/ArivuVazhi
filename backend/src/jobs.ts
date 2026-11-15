@@ -4,6 +4,7 @@ import { nextIstRun, stemKey } from "./governance.js";
 import { Bookmark, DailyMockSet, Exam, JobLock, JobRun, MockAttempt, MockTest, PracticeSession, Question, QuestionReport, QuestionSeen, User } from "./models.js";
 import { ensureDailyMock, generateDailyMockSet } from "./daily-mock.js";
 import { autoReviewQuestions } from "./question-ai.js";
+import { runScheduledDiscovery } from "./pyq/discovery.js";
 
 const JOB = "daily_mock_sets";
 /** Only students active in this many days get a set, to bound AI spend. */
@@ -146,7 +147,8 @@ async function execute(run: InstanceType<typeof JobRun>, trigger: Trigger) {
     try {
       const reviewed = await reviewBacklog();
       const cleaned = await cleanupOldData();
-      console.log(JSON.stringify({ job: JOB, housekeeping: { reviewed, ...cleaned } }));
+      const pyqDiscovery = await runScheduledDiscovery();
+      console.log(JSON.stringify({ job: JOB, housekeeping: { reviewed, ...cleaned, pyqDiscovery } }));
     } catch (error) {
       console.warn(`Daily housekeeping failed: ${error instanceof Error ? error.message : error}`);
     }

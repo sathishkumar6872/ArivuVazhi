@@ -169,8 +169,18 @@ export const Question = mongoose.model(
       /** Original PYQs: the paper and question number they came from. */
       pyqPaperId: { type: String, default: "" },
       pyqNumber: { type: Number, default: null },
+      pyqDocumentId: { type: String, default: "" },
+      pyqPage: { type: Number, default: null },
+      /** Where the answer came from. AI answers are never "official". */
+      keyStatus: { type: String, enum: ["", "official_final", "official_revised", "official_tentative", "admin", "unverified"], default: "" },
+      /** Possible duplicate of another question (kept for admin review, never silently removed). */
+      duplicateOf: { type: String, default: "" },
       /** Format, for pattern analysis: direct, statement, match, assertion_reason, sequence, odd_one_out, fill_blank, other. */
       questionType: { type: String, default: "" },
+      /** Finer topic label (free text from extraction or admin), for pattern analysis. */
+      subtopic: { type: String, default: "" },
+      /** Option the paper visibly marks, as read by AI. Only a suggestion: never used as the answer until an admin accepts it. */
+      aiSuggestedKey: { type: String, default: "" },
       rightsStatus: { type: String, enum: ["pending", "verified", "rejected", "not_applicable"], default: "not_applicable" },
       marks: { type: Number, default: 1.5 },
     },
@@ -576,6 +586,8 @@ export const AppConfig = mongoose.model(
       id: { type: String, required: true, unique: true },
       maxSessions: { type: Number, default: 5 },
       aiProvider: { type: String, enum: ["local", "chatgpt", "openai", "gemini", "ollama"], default: "local" },
+      /** AI for PYQ discovery and extraction: auto = the active provider. OCR always uses Gemini. */
+      pyqProvider: { type: String, enum: ["auto", "chatgpt", "gemini"], default: "auto" },
       chatgptEnabled: { type: Boolean, default: false },
       geminiEnabled: { type: Boolean, default: false },
       monthlyBudgetInr: { type: Number, default: 500 },
@@ -630,6 +642,13 @@ export const PyqPaper = mongoose.model(
       examId: { type: String, required: true },
       title: { type: String, required: true },
       year: { type: Number, required: true },
+      /** Session identity: question papers and answer keys are matched on these. */
+      stage: { type: String, default: "" },
+      /** Printed subject/paper code, when known (not part of the identity). */
+      subjectCode: { type: String, default: "" },
+      paperName: { type: String, default: "" },
+      language: { type: String, enum: ["en", "ta", "bilingual", ""], default: "" },
+      shift: { type: String, default: "" },
       sourceName: { type: String, required: true },
       rightsStatus: { type: String, enum: ["pending", "verified", "rejected"], default: "pending" },
       status: { type: String, enum: ["draft", "under_review", "published", "rejected"], default: "draft" },
@@ -641,9 +660,9 @@ export const PyqPaper = mongoose.model(
       generationSource: { type: String, enum: ["ai", "import", "manual"], default: "ai" },
       /** Where the original paper came from (official page / PDF link). */
       sourceUrl: { type: String, default: "" },
-      /** Uploaded files (content is not stored here; Drive storage comes later). */
+      /** Uploaded files; `fileId` points to the StoredFile kept in Google Drive when storage is connected. */
       files: {
-        type: [{ _id: false, kind: { type: String, enum: ["questions", "answers"] }, name: String, size: Number, sha256: String, uploadedAt: Date }],
+        type: [{ _id: false, kind: { type: String, enum: ["questions", "answers"] }, name: String, size: Number, sha256: String, uploadedAt: Date, fileId: { type: String, default: "" } }],
         default: [],
       },
       /** AI extraction of the uploaded PDF into questions. */
@@ -720,3 +739,223 @@ SyncReceipt.schema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 6
 JobRun.schema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 // AI usage must cover the whole month for the monthly budget, so it keeps 40 days.
 AiUsage.schema.index({ createdAt: 1 }, { expireAfterSeconds: 40 * 24 * 60 * 60 });
+
+/**
+ * File storage connection (one document, id "default"). OAuth client secret and
+ * refresh token are AES-256-GCM encrypted (crypto-secret.ts); never sent to clients.
+ */
+export const StorageConfig = mongoose.model(
+  "StorageConfig",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      provider: { type: String, enum: ["none", "google_drive"], default: "none" },
+      clientIdEnc: { type: String, default: "" },
+      clientSecretEnc: { type: String, default: "" },
+      refreshTokenEnc: { type: String, default: "" },
+      accountEmail: { type: String, default: "" },
+      folderId: { type: String, default: "" },
+      folderName: { type: String, default: "ArivuVazhi" },
+      status: { type: String, enum: ["disconnected", "connected", "authorization_expired", "configuration_error"], default: "disconnected" },
+      lastError: { type: String, default: "" },
+      connectedAt: { type: Date, default: null },
+      lastCheckedAt: { type: Date, default: null },
+      /** One-time OAuth state (CSRF) for the pending "Connect Google Account" flow. */
+      oauthState: { type: String, default: "" },
+      oauthStateExpires: { type: Date, default: null },
+      oauthActorId: { type: String, default: "" },
+    },
+    { timestamps: true },
+  ),
+);
+
+/** A file kept in external storage; only its reference and metadata live here. */
+export const StoredFile = mongoose.model(
+  "StoredFile",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      provider: { type: String, enum: ["google_drive", "memory"], required: true },
+      providerFileId: { type: String, required: true },
+      name: { type: String, required: true },
+      mimeType: { type: String, required: true },
+      size: { type: Number, default: 0 },
+      sha256: { type: String, default: "" },
+      kind: { type: String, enum: ["pyq_paper", "pyq_answer_key", "study_material", "student_document", "question_image", "other"], default: "other" },
+      ownerType: { type: String, enum: ["admin", "student", "system"], default: "admin" },
+      ownerId: { type: String, default: "" },
+      /** private = owner and admins only; students = any signed-in student. */
+      visibility: { type: String, enum: ["private", "students"], default: "private" },
+      refType: { type: String, default: "" },
+      refId: { type: String, default: "" },
+      deletedAt: { type: Date, default: null },
+    },
+    { timestamps: true },
+  ),
+);
+StoredFile.schema.index({ refType: 1, refId: 1 });
+
+/** Sub-folders created inside the storage root, by path ("PYQ/TNPSC Group IV/2023/…"). */
+export const StorageFolder = mongoose.model(
+  "StorageFolder",
+  new Schema(
+    {
+      rootId: { type: String, required: true },
+      path: { type: String, required: true },
+      providerFolderId: { type: String, required: true },
+    },
+    { timestamps: true },
+  ),
+);
+StorageFolder.schema.index({ rootId: 1, path: 1 }, { unique: true });
+
+PyqPaper.schema.index({ examId: 1, year: 1, stage: 1, paperName: 1, language: 1, shift: 1 });
+
+/**
+ * One original document (question paper or answer key) for a PYQ session. The file
+ * itself stays unchanged in storage (Drive); extracted questions point back to it.
+ */
+export const PyqDocument = mongoose.model(
+  "PyqDocument",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      /** The session it is matched to; "" = matching required. */
+      paperId: { type: String, default: "", index: true },
+      examId: { type: String, required: true, index: true },
+      year: { type: Number, required: true },
+      stage: { type: String, default: "" },
+      paperName: { type: String, default: "" },
+      language: { type: String, enum: ["en", "ta", "bilingual", ""], default: "" },
+      shift: { type: String, default: "" },
+      docType: { type: String, enum: ["question_paper", "answer_key"], required: true },
+      /** Printed subject/paper code (e.g. TNPSC "Subject Code 004"); used to match keys to papers. */
+      subjectCode: { type: String, default: "" },
+      /** One answer-key PDF holding several subjects is split per subject; parts point to the original document. */
+      splitFrom: { type: String, default: "" },
+      /** Answer keys only. */
+      keyVersion: { type: String, enum: ["", "tentative", "final", "revised"], default: "" },
+      versionNo: { type: Number, default: 1 },
+      fileId: { type: String, default: "" },
+      fileName: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+      sha256: { type: String, default: "" },
+      pages: { type: Number, default: 0 },
+      source: {
+        kind: { type: String, enum: ["manual", "discovered"], default: "manual" },
+        name: { type: String, default: "" },
+        url: { type: String, default: "" },
+        sourceId: { type: String, default: "" },
+        pageUrl: { type: String, default: "" },
+      },
+      /**
+       * link_only = found but not downloadable (admin downloads and uploads it);
+       * needs_review = processed, waiting for admin; approved/rejected = admin decision.
+       */
+      status: {
+        type: String,
+        enum: ["link_only", "uploaded", "processing", "processed", "failed", "approved", "rejected"],
+        default: "uploaded",
+      },
+      processing: {
+        method: { type: String, enum: ["", "text", "ocr"], default: "" },
+        error: { type: String, default: "" },
+        questions: { type: Number, default: 0 },
+        answers: { type: Number, default: 0 },
+        startedAt: { type: Date, default: null },
+        finishedAt: { type: Date, default: null },
+      },
+      /** Answer keys: official entries as read from the document. */
+      answers: { type: [{ _id: false, number: Number, key: String, note: String }], default: [] },
+      /** Validation findings for the admin (missing numbers, unknown options, ...). */
+      warnings: { type: [String], default: [] },
+      /** Other links where the same file (same hash) was found, so discovery never downloads it again. */
+      alsoFoundAt: { type: [String], default: [] },
+      uploadedBy: { type: String, default: "" },
+      reviewedBy: { type: String, default: "" },
+    },
+    { timestamps: true },
+  ),
+);
+PyqDocument.schema.index({ sha256: 1 });
+PyqDocument.schema.index({ "source.url": 1 });
+PyqDocument.schema.index({ alsoFoundAt: 1 });
+
+/** A website the discovery job may read for question papers / answer keys. */
+export const PyqSource = mongoose.model(
+  "PyqSource",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      name: { type: String, required: true },
+      url: { type: String, required: true },
+      type: { type: String, enum: ["official", "verified"], default: "official" },
+      examIds: { type: [String], default: [] },
+      enabled: { type: Boolean, default: true },
+      lastCheckedAt: { type: Date, default: null },
+      lastSuccessAt: { type: Date, default: null },
+      reliability: { type: String, enum: ["unknown", "ok", "degraded", "failing"], default: "unknown" },
+      /** Found automatically (official site + question-paper page check), not typed in by an admin. */
+      autoAdded: { type: Boolean, default: false },
+      lastError: { type: String, default: "" },
+    },
+    { timestamps: true },
+  ),
+);
+
+/** Per-exam collection settings chosen by the admin. */
+export const PyqCollection = mongoose.model(
+  "PyqCollection",
+  new Schema(
+    {
+      examId: { type: String, required: true, unique: true },
+      startYear: { type: Number, required: true },
+      endYear: { type: Number, required: true },
+      languages: { type: [String], default: ["ta", "en"] },
+      stages: { type: [String], default: [] },
+      method: { type: String, enum: ["manual", "automatic", "both"], default: "both" },
+      docTypes: { type: [String], default: ["question_paper", "answer_key"] },
+      schedule: { type: String, enum: ["off", "weekly"], default: "off" },
+      lastRunAt: { type: Date, default: null },
+    },
+    { timestamps: true },
+  ),
+);
+
+/** One discovery run, for monitoring. */
+export const PyqJob = mongoose.model(
+  "PyqJob",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      examId: { type: String, required: true, index: true },
+      startYear: { type: Number, required: true },
+      endYear: { type: Number, required: true },
+      trigger: { type: String, enum: ["manual", "schedule"], default: "manual" },
+      status: { type: String, enum: ["running", "done", "failed"], default: "running" },
+      sourcesChecked: { type: [String], default: [] },
+      discovered: { type: Number, default: 0 },
+      downloaded: { type: Number, default: 0 },
+      uploaded: { type: Number, default: 0 },
+      skipped: { type: Number, default: 0 },
+      failed: { type: Number, default: 0 },
+      missing: { type: [{ _id: false, year: Number, docType: String }], default: [] },
+      /** Live progress: 1 finding site, 2 reading pages, 3 AI checking links, 4 downloading, 5 finished. */
+      progress: {
+        step: { type: Number, default: 0 },
+        label: { type: String, default: "Starting" },
+        done: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+        current: { type: String, default: "" },
+      },
+      /** Documents this job added (their processing = "reading questions" progress). */
+      documentIds: { type: [String], default: [] },
+      log: { type: [String], default: [] },
+      error: { type: String, default: "" },
+      startedAt: { type: Date, default: Date.now },
+      finishedAt: { type: Date, default: null },
+    },
+    { timestamps: true },
+  ),
+);

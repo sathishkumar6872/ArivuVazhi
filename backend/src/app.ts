@@ -14,6 +14,9 @@ import { studentRouter } from "./routes/student.js";
 import { learningRouter } from "./routes/learning.js";
 import { adminRouter } from "./routes/admin.js";
 import { getDailyMockRun, startDailyMockJob } from "./jobs.js";
+import { filesRouter, storageAdminRouter } from "./routes/storage.js";
+import { pyqAdminRouter } from "./routes/pyq-admin.js";
+import { completeGoogleAuth } from "./storage/index.js";
 import crypto from "node:crypto";
 
 function safeEqual(left: string, right: string) {
@@ -56,6 +59,21 @@ export function createApp() {
     }
     res.redirect(`${config.adminPortalUrl}/ai?${new URLSearchParams(params)}`);
   });
+  // Google Drive OAuth returns here (public; the one-time state ties it to the admin who started it).
+  app.get("/api/v1/admin/storage/google/callback", async (req, res) => {
+    let params: Record<string, string>;
+    try {
+      if (typeof req.query.error === "string") throw new Error(req.query.error === "access_denied" ? "Google access was not granted." : "Google sign-in failed.");
+      const result = await completeGoogleAuth({ code: String(req.query.code || ""), state: String(req.query.state || "") });
+      params = { drive: "connected", account: result.email };
+    } catch (error) {
+      params = { drive: "error", message: error instanceof Error ? error.message : "Google Drive connection failed" };
+    }
+    res.redirect(`${config.adminPortalUrl}/storage?${new URLSearchParams(params)}`);
+  });
+  app.use("/api/v1/admin/storage", storageAdminRouter);
+  app.use("/api/v1/admin/pyq", pyqAdminRouter);
+  app.use("/api/v1/files", filesRouter);
   app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60 * 1000, limit: 40, standardHeaders: true, legacyHeaders: false }));
   app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
   app.get("/api/v1/openapi.json", (_req, res) => res.json(openApiSpec));
