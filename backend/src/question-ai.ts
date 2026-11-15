@@ -423,6 +423,7 @@ function prefetchPractice(input: {
       const ready = await Question.countDocuments(
         {
           examId: input.examId,
+          source: { $ne: "pyq" },
           ...visibleToStudent(input.studentId),
           language: input.language,
           id: { $nin: seen },
@@ -490,7 +491,7 @@ export async function ensurePracticeQuestions(input: {
   const seen = new Set(seenLists.flat());
 
   // The exam's shared pool; questions this student was already shown (practice or daily mock) are excluded below.
-  const scope: Record<string, unknown> = { examId: input.examId, ...visibleToStudent(input.studentId) };
+  const scope: Record<string, unknown> = { examId: input.examId, source: { $ne: "pyq" }, ...visibleToStudent(input.studentId) };
   if (input.topicId) scope.topicId = input.topicId;
   else if (input.topicIds?.length) scope.topicId = { $in: input.topicIds };
   const exact: Record<string, unknown> = { ...scope, language };
@@ -640,4 +641,18 @@ export async function recordAnswerStats(questionId: string, correct: boolean) {
       { $set: { flagged: true, flagReason: `Possible wrong key: ${Math.round((1 - right / answered) * 100)}% of ${answered} answers marked wrong` } },
     );
   }
+}
+
+/**
+ * One AI call that must return JSON: budget check, provider choice, timeout and
+ * usage logging in one place (used by PYQ import and pattern analysis).
+ */
+export async function completeAiJson(input: { system: string; user: string; feature: string; label: string; userId?: string }) {
+  await assertAiBudgetAvailable(input.label);
+  const provider = await resolveProvider();
+  if (provider === "local") throw new HttpError(503, "Enable ChatGPT or Gemini in AI providers first.", "AI_UNAVAILABLE");
+  const raw = await withTimeout(completeRaw(input.system, input.user, provider), input.label);
+  const tokens = Math.ceil((input.system.length + input.user.length + raw.length) / 4);
+  await AiUsage.create({ id: nid(), userId: input.userId || "system", provider, feature: input.feature, tokens, estimatedInr: estimateAiInr(tokens, provider) });
+  return { json: extractJson(raw), provider };
 }

@@ -224,7 +224,8 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
       const need = section.target - section.questionIds.length;
       if (need <= 0) continue;
       const rows = await Question.aggregate<{ id: string }>([
-        { $match: { examId: exam.id, subjectId: section.subjectId, language, ...visibleToStudent(input.studentId), id: { $nin: [...seen, ...taken] } } },
+        // Original PYQs stay in the PYQ section; mocks use AI questions only.
+        { $match: { examId: exam.id, subjectId: section.subjectId, language, source: { $ne: "pyq" }, ...visibleToStudent(input.studentId), id: { $nin: [...seen, ...taken] } } },
         { $sample: { size: need } },
         { $project: { _id: 0, id: 1 } },
       ]);

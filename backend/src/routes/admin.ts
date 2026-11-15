@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { audit, requireAuth, requireRole } from "../auth.js";
 import { HttpError, nid, pageQuery, sendList, wrap } from "../http.js";
@@ -35,6 +35,7 @@ import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
 import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
+import { applyAnswerKey, fileMeta, importPyqPaper, pdfText, publishPyqPaper } from "../pyq-import.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireRole("admin", "reviewer"));
@@ -516,7 +517,8 @@ adminRouter.patch(
       if (!body.changeReason) {
         throw new HttpError(400, "changeReason required for any question content edit", "REASON_REQUIRED");
       }
-      if (body.correctKey !== undefined && body.correctKey !== question.correctKey) {
+      // Setting a key on a question that had none (e.g. an imported PYQ) is not a correction.
+      if (body.correctKey !== undefined && body.correctKey !== question.correctKey && question.correctKey !== "?") {
         if (!body.oldAnswerMistake || !body.newAnswerWhyCorrect) {
           throw new HttpError(
             400,
@@ -616,6 +618,102 @@ adminRouter.post(
     });
     await audit(req.user!.id, "pyq_create", "pyq", paper.id);
     res.status(201).json({ data: paper });
+  }),
+);
+
+/** Raw PDF uploads (application/pdf body), up to 25 MB. */
+const pdfBody = express.raw({ type: "application/pdf", limit: "25mb" });
+
+/**
+ * Upload an official question paper PDF. The paper is created at once; AI extracts the
+ * questions in the background (poll GET /pyq/:id). Nothing reaches students until the
+ * rights are verified and the paper is published.
+ */
+adminRouter.post(
+  "/pyq/import",
+  pdfBody,
+  wrap(async (req, res) => {
+    const query = z
+      .object({
+        examId: z.string().min(8),
+        year: z.coerce.number().int().min(1990).max(2100),
+        title: z.string().min(2).max(200),
+        sourceName: z.string().min(2).max(200),
+        sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+        fileName: z.string().max(200).optional(),
+      })
+      .parse(req.query);
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    await pdfText(buffer); // validate before creating anything
+    if (!(await Exam.exists({ id: query.examId }))) throw new HttpError(404, "Exam not found", "NOT_FOUND");
+    const paper = await PyqPaper.create({
+      id: nid(),
+      examId: query.examId,
+      title: query.title,
+      year: query.year,
+      sourceName: query.sourceName,
+      sourceUrl: query.sourceUrl || "",
+      status: "under_review",
+      rightsStatus: "pending",
+      generationSource: "import",
+      files: [fileMeta("questions", query.fileName || "question-paper.pdf", buffer)],
+    });
+    await audit(req.user!.id, "pyq_import", "pyq", paper.id, { examId: query.examId, year: query.year, bytes: buffer.length });
+    void importPyqPaper(paper.id, buffer).catch((error) => console.warn(`PYQ import ${paper.id} failed: ${error instanceof Error ? error.message : error}`));
+    res.status(202).json({ data: { id: paper.id, extraction: { status: "processing" } } });
+  }),
+);
+
+/** Re-run extraction on a new copy of the paper (replaces its unpublished questions). */
+adminRouter.post(
+  "/pyq/:id/reimport",
+  pdfBody,
+  wrap(async (req, res) => {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    await pdfText(buffer);
+    const paper = await PyqPaper.findOne({ id: req.params.id });
+    if (!paper) throw new HttpError(404, "PYQ paper not found", "NOT_FOUND");
+    paper.files = [...paper.files.filter((file) => file.kind !== "questions"), fileMeta("questions", String(req.query.fileName || "question-paper.pdf"), buffer)] as never;
+    await paper.save();
+    await audit(req.user!.id, "pyq_reimport", "pyq", paper.id);
+    void importPyqPaper(paper.id, buffer).catch((error) => console.warn(`PYQ re-import ${paper.id} failed: ${error instanceof Error ? error.message : error}`));
+    res.status(202).json({ data: { id: paper.id, extraction: { status: "processing" } } });
+  }),
+);
+
+/** Upload the official answer key PDF and apply it to the extracted questions. */
+adminRouter.post(
+  "/pyq/:id/answer-key",
+  pdfBody,
+  wrap(async (req, res) => {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const result = await applyAnswerKey(req.params.id, buffer);
+    await PyqPaper.updateOne(
+      { id: req.params.id },
+      { $push: { files: fileMeta("answers", String(req.query.fileName || "answer-key.pdf"), buffer) } },
+    );
+    await audit(req.user!.id, "pyq_answer_key", "pyq", req.params.id, result);
+    res.json({ data: result });
+  }),
+);
+
+/** One paper with its extracted questions (answer keys included, admin only). */
+adminRouter.get(
+  "/pyq/:id",
+  wrap(async (req, res) => {
+    const paper = await PyqPaper.findOne({ id: req.params.id }).lean();
+    if (!paper) throw new HttpError(404, "PYQ paper not found", "NOT_FOUND");
+    const questions = await Question.find({ pyqPaperId: paper.id }).sort({ pyqNumber: 1 }).lean();
+    res.json({ data: { ...paper, questions } });
+  }),
+);
+
+adminRouter.post(
+  "/pyq/:id/publish",
+  wrap(async (req, res) => {
+    const result = await publishPyqPaper(req.params.id, req.user!.id);
+    await audit(req.user!.id, "pyq_publish", "pyq", req.params.id, result);
+    res.json({ data: result });
   }),
 );
 

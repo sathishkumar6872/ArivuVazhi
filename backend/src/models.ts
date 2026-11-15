@@ -166,6 +166,11 @@ export const Question = mongoose.model(
         default: "draft",
       },
       pyqYear: { type: Number, default: null },
+      /** Original PYQs: the paper and question number they came from. */
+      pyqPaperId: { type: String, default: "" },
+      pyqNumber: { type: Number, default: null },
+      /** Format, for pattern analysis: direct, statement, match, assertion_reason, sequence, odd_one_out, fill_blank, other. */
+      questionType: { type: String, default: "" },
       rightsStatus: { type: String, enum: ["pending", "verified", "rejected", "not_applicable"], default: "not_applicable" },
       marks: { type: Number, default: 1.5 },
     },
@@ -634,6 +639,22 @@ export const PyqPaper = mongoose.model(
       questionPaperText: { type: String, default: "" },
       answerPaperText: { type: String, default: "", select: false },
       generationSource: { type: String, enum: ["ai", "import", "manual"], default: "ai" },
+      /** Where the original paper came from (official page / PDF link). */
+      sourceUrl: { type: String, default: "" },
+      /** Uploaded files (content is not stored here; Drive storage comes later). */
+      files: {
+        type: [{ _id: false, kind: { type: String, enum: ["questions", "answers"] }, name: String, size: Number, sha256: String, uploadedAt: Date }],
+        default: [],
+      },
+      /** AI extraction of the uploaded PDF into questions. */
+      extraction: {
+        status: { type: String, enum: ["none", "processing", "done", "failed"], default: "none" },
+        error: { type: String, default: "" },
+        questions: { type: Number, default: 0 },
+        withKey: { type: Number, default: 0 },
+        provider: { type: String, default: "" },
+        finishedAt: { type: Date, default: null },
+      },
     },
     { timestamps: true },
   ),
@@ -659,6 +680,7 @@ Question.schema.index({ examId: 1, stemKey: 1 });
 PracticeSession.schema.index({ studentId: 1, examId: 1, createdAt: -1 });
 Question.schema.index({ examId: 1, subjectId: 1, language: 1, status: 1 });
 Question.schema.index({ status: 1, flagged: 1, "stats.answered": -1 });
+Question.schema.index({ pyqPaperId: 1, pyqNumber: 1 });
 
 /** Every question a student has been shown (practice answer or daily mock), so the shared pool never repeats one. */
 export const QuestionSeen = mongoose.model(
