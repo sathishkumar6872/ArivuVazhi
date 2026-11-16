@@ -4,6 +4,7 @@ import { nameKey, stemKey } from "../governance.js";
 import { HttpError, nid } from "../http.js";
 import { Exam, PyqDocument, PyqPaper, Question, QuestionChangeLog, Subject, Topic } from "../models.js";
 import { downloadFile, storageReady, uploadFile } from "../storage/index.js";
+import { scheduleAnalysis } from "./analysis.js";
 import { QUESTION_TYPES, extractAnswers, extractQuestions } from "./extract.js";
 
 const KEYS = ["A", "B", "C", "D", "E", "F"];
@@ -317,6 +318,7 @@ export async function processDocument(documentId: string, buffer?: Buffer) {
     } catch (error) {
       console.warn(`PYQ matching after ${doc.id}: ${error instanceof Error ? error.message : error}`);
     }
+    if (doc.docType === "question_paper") scheduleAnalysis(doc.examId);
     return (await PyqDocument.findOne({ id: doc.id }).lean()) || doc.toObject();
   } catch (error) {
     doc.set({ status: "failed", processing: { ...(doc.processing || {}), error: error instanceof Error ? error.message.slice(0, 300) : "Processing failed", finishedAt: new Date() } });
@@ -488,6 +490,7 @@ export async function reviewDocument(documentId: string, decision: "approve" | "
   let applied = 0;
   if (doc.paperId && doc.docType === "answer_key") applied = await applyOfficialKeys(doc.paperId, actorId);
   if (decision === "reject" && doc.docType === "question_paper") await Question.updateMany({ pyqDocumentId: doc.id, status: { $ne: "published" } }, { $set: { status: "rejected" } });
+  if (doc.docType === "question_paper") scheduleAnalysis(doc.examId);
   await audit(actorId, `pyq_document_${decision}`, "pyq_document", documentId, { applied });
   return { status: doc.status, applied };
 }

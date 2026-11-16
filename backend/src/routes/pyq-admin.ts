@@ -2,8 +2,9 @@ import express, { Router } from "express";
 import { z } from "zod";
 import { audit, requireAuth, requireRole } from "../auth.js";
 import { HttpError, nid, wrap } from "../http.js";
-import { AppConfig, Exam, PyqCollection, PyqDocument, PyqJob, PyqPaper, PyqSource, Question, Subject, Topic } from "../models.js";
+import { AppConfig, Exam, PyqAnalysis, PyqCollection, PyqDocument, PyqJob, PyqPaper, PyqSource, Question, Subject, Topic } from "../models.js";
 import { QUESTION_TYPES } from "../pyq/extract.js";
+import { runAnalysis } from "../pyq/analysis.js";
 import { downloadFile } from "../storage/index.js";
 import { addDocument, claimDocument, linkDocument, matchStatus, publishSession, retryDocument, reviewDocument } from "../pyq/documents.js";
 import { failStaleJobs, missingDocuments, runDiscovery } from "../pyq/discovery.js";
@@ -84,6 +85,26 @@ pyqAdminRouter.get(
     ]);
     // Syllabus lists let the admin correct each question's subject/topic.
     res.json({ data: { ...row, documents, questions, matchStatus: matchStatus(documents), syllabus: { subjects, topics, questionTypes: QUESTION_TYPES } } });
+  }),
+);
+
+// ---------- Pattern analysis (per exam) ----------
+
+pyqAdminRouter.get(
+  "/analysis/:examId",
+  wrap(async (req, res) => {
+    const row = (await PyqAnalysis.findOne({ examId: req.params.examId }).lean()) || (await runAnalysis(req.params.examId));
+    res.json({ data: row });
+  }),
+);
+
+pyqAdminRouter.post(
+  "/analysis/:examId",
+  wrap(async (req, res) => {
+    if (!(await Exam.exists({ id: req.params.examId }))) throw new HttpError(404, "Exam not found", "NOT_FOUND");
+    const row = await runAnalysis(req.params.examId);
+    await audit(req.user!.id, "pyq_analysis_run", "exam", req.params.examId, { status: row?.status });
+    res.json({ data: row });
   }),
 );
 

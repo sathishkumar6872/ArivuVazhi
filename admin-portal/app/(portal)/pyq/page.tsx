@@ -6,6 +6,25 @@ import { API_URL, api } from "@/lib/api";
 import { Eyebrow, useData } from "@/components/Frame";
 
 type Exam = { id: string; name: string };
+type Analysis = {
+  status: "ready" | "insufficient" | "empty";
+  computedAt: string | null;
+  result: {
+    years?: number[];
+    yearSize?: Record<string, number>;
+    papers?: number;
+    questions?: number;
+    notes?: string[];
+    changes?: string[];
+    subjects?: Array<{ id: string; name: string; total: number; share: number; byYear: Record<string, number> }>;
+    topics?: Array<{ id: string; name: string; subject: string; total: number; years: number[] }>;
+    frequentTopics?: Array<{ id: string; name: string; subject: string; total: number; years: number[] }>;
+    subtopics?: Array<{ name: string; total: number }>;
+    repeated?: Array<{ stem: string; years: number[] }>;
+    types?: Record<string, number>;
+    difficulty?: Record<string, number>;
+  };
+};
 type Settings = { startYear: number; endYear: number; languages: string[]; stages: string[]; method: string; docTypes: string[]; schedule: string; lastRunAt?: string };
 type YearRow = { year: number; questionPapers: number; answerKeys: number; linkOnly: number; awaitingReview: number; failed: number; status: string[] };
 type Overview = { settings: Settings | null; years: YearRow[]; missing: Array<{ year: number; docType: string }> };
@@ -142,6 +161,7 @@ export default function PyqPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [open, setOpen] = useState<SessionDetail | null>(null);
   const [previewDoc, setPreviewDoc] = useState("");
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
 
   const [form, setForm] = useState({ year: String(thisYear - 1), docType: "question_paper", keyVersion: "final", stage: "", paperName: "", language: "ta", shift: "", subjectCode: "", sourceName: "TNPSC", sourceUrl: "" });
   const [files, setFiles] = useState<File[]>([]);
@@ -185,6 +205,13 @@ export default function PyqPage() {
     setOpen(null);
     refresh().catch((err) => setError(err.message));
   }, [refresh]);
+
+  // Pattern analysis loads when its tab is opened (stored on the server; recomputed after papers change).
+  useEffect(() => {
+    if (tab !== 5 || !examId) return;
+    setAnalysis(null);
+    api<Analysis>(`/admin/pyq/analysis/${examId}`).then(setAnalysis).catch((err) => setError(err.message));
+  }, [tab, examId]);
 
   // Keep refreshing while anything is still processing or a job is running.
   const working =
@@ -255,6 +282,7 @@ export default function PyqPage() {
         <Tab label={`Sessions (${sessions.length})`} />
         <Tab label={`Needs attention (${unmatched.length + linkOnly.length})`} />
         <Tab label="Sources" />
+        <Tab label="Analysis" />
       </Tabs>
 
       {tab === 0 && (
@@ -520,6 +548,106 @@ export default function PyqPage() {
               </Box>
             ))}
           </Card>
+        </Box>
+      )}
+
+      {tab === 5 && (
+        <Box sx={{ display: "grid", gap: 2 }}>
+          <Card sx={{ p: 2 }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+              <Box>
+                <Typography fontWeight={800}>
+                  Pattern analysis · {examName}{" "}
+                  {analysis ? <Chip size="small" sx={{ ml: 1 }} color={analysis.status === "ready" ? "success" : "warning"} label={analysis.status === "ready" ? "ready" : analysis.status === "insufficient" ? "insufficient data" : "no data"} /> : null}
+                </Typography>
+                <Typography fontSize={13} color="text.secondary">
+                  {analysis?.result.questions ?? 0} questions · {analysis?.result.papers ?? 0} papers · years {(analysis?.result.years || []).join(", ") || "—"}
+                  {analysis?.computedAt ? ` · updated ${new Date(analysis.computedAt).toLocaleString()}` : ""}
+                </Typography>
+                <Typography fontSize={12} color="text.secondary">Facts from processed papers only (rejected and failed papers are left out). A question printed in two papers of the same year counts once.</Typography>
+              </Box>
+              <Button variant="outlined" disabled={Boolean(busy)} onClick={() => run("analysis", async () => setAnalysis(await api<Analysis>(`/admin/pyq/analysis/${examId}`, { method: "POST" })), "Analysis updated.")}>Recompute</Button>
+            </Box>
+            {(analysis?.result.notes || []).map((note) => <Alert key={note} severity="info" sx={{ mt: 1 }}>{note}</Alert>)}
+          </Card>
+
+          {analysis?.result.changes?.length ? (
+            <Card sx={{ p: 2 }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Pattern changes (latest two comparable years)</Typography>
+              {analysis.result.changes.map((change) => <Typography key={change} fontSize={14}>• {change}</Typography>)}
+            </Card>
+          ) : null}
+
+          {analysis?.result.subjects?.length ? (
+            <Card sx={{ p: 2, overflowX: "auto" }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Subject distribution</Typography>
+              <Box component="table" sx={{ borderCollapse: "collapse", fontSize: 14, "& td, & th": { borderBottom: "1px solid #E4EFE7", p: 0.75, textAlign: "right" }, "& td:first-of-type, & th:first-of-type": { textAlign: "left" } }}>
+                <thead>
+                  <tr>
+                    <th>Subject</th>
+                    {(analysis.result.years || []).map((year) => <th key={year}>{year}</th>)}
+                    <th>Total</th>
+                    <th>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysis.result.subjects.map((subject) => (
+                    <tr key={subject.id}>
+                      <td>{subject.name}</td>
+                      {(analysis.result.years || []).map((year) => <td key={year}>{subject.byYear[year] || 0}</td>)}
+                      <td>{subject.total}</td>
+                      <td>{subject.share}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Box>
+            </Card>
+          ) : null}
+
+          <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
+            <Card sx={{ p: 2 }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Frequent topics (asked in most years)</Typography>
+              {analysis?.result.frequentTopics?.length ? (
+                analysis.result.frequentTopics.map((topic) => (
+                  <Typography key={topic.id} fontSize={14}>{topic.name} <Typography component="span" fontSize={12} color="text.secondary">· {topic.subject} · {topic.total} questions · {topic.years.join(", ")}</Typography></Typography>
+                ))
+              ) : (
+                <Typography fontSize={13} color="text.secondary">Needs papers from at least 2 years.</Typography>
+              )}
+            </Card>
+            <Card sx={{ p: 2 }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Most asked topics</Typography>
+              {(analysis?.result.topics || []).slice(0, 15).map((topic) => (
+                <Typography key={topic.id} fontSize={14}>{topic.name} <Typography component="span" fontSize={12} color="text.secondary">· {topic.subject} · {topic.total}</Typography></Typography>
+              ))}
+              {!analysis?.result.topics?.length ? <Typography fontSize={13} color="text.secondary">No topics mapped yet.</Typography> : null}
+            </Card>
+            <Card sx={{ p: 2 }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Question types</Typography>
+              <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+                {Object.entries(analysis?.result.types || {}).sort((a, b) => b[1] - a[1]).map(([type, count]) => <Chip key={type} size="small" label={`${type.replace(/_/g, " ")} · ${count}`} />)}
+              </Box>
+              <Typography fontWeight={800} sx={{ mt: 2, mb: 1 }}>Difficulty (AI estimate)</Typography>
+              <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+                {Object.entries(analysis?.result.difficulty || {}).map(([level, count]) => <Chip key={level} size="small" label={`${level} · ${count}`} />)}
+              </Box>
+              {analysis?.result.subtopics?.length ? (
+                <>
+                  <Typography fontWeight={800} sx={{ mt: 2, mb: 1 }}>Repeated subtopics</Typography>
+                  <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+                    {analysis.result.subtopics.map((sub) => <Chip key={sub.name} size="small" variant="outlined" label={`${sub.name} · ${sub.total}`} />)}
+                  </Box>
+                </>
+              ) : null}
+            </Card>
+            <Card sx={{ p: 2 }}>
+              <Typography fontWeight={800} sx={{ mb: 1 }}>Repeated questions (same question, different years)</Typography>
+              {(analysis?.result.repeated || []).map((row) => (
+                <Typography key={row.stem} fontSize={14} sx={{ mb: 0.5 }}>{row.stem} <Typography component="span" fontSize={12} color="text.secondary">· {row.years.join(", ")}</Typography></Typography>
+              ))}
+              {!analysis?.result.repeated?.length ? <Typography fontSize={13} color="text.secondary">None found.</Typography> : null}
+            </Card>
+          </Box>
         </Box>
       )}
 

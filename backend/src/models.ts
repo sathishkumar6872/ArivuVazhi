@@ -923,6 +923,23 @@ export const PyqCollection = mongoose.model(
   ),
 );
 
+/**
+ * Stored PYQ pattern analysis of an exam (one per exam), recomputed after papers are
+ * processed or reviewed. status: ready, insufficient (too few years for trends), empty.
+ */
+export const PyqAnalysis = mongoose.model(
+  "PyqAnalysis",
+  new Schema(
+    {
+      examId: { type: String, required: true, unique: true },
+      status: { type: String, enum: ["ready", "insufficient", "empty"], default: "empty" },
+      result: { type: Schema.Types.Mixed, default: {} },
+      computedAt: { type: Date, default: null },
+    },
+    { timestamps: true, minimize: false },
+  ),
+);
+
 /** One discovery run, for monitoring. */
 export const PyqJob = mongoose.model(
   "PyqJob",
