@@ -889,7 +889,15 @@ learningRouter.post(
       estimatedInr: estimateAiInr(reply.tokens, reply.providerUsed),
       }),
     ]);
-    res.json({ data: { conversationId: conversation.id, reply: reply.answer, sources: reply.sources, provider: reply.providerUsed } });
+    res.json({
+      data: {
+        conversationId: conversation.id,
+        reply: reply.answer,
+        sources: reply.sources,
+        provider: reply.providerUsed,
+        aiAvailable: reply.aiAvailable,
+      },
+    });
   }),
 );
 

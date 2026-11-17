@@ -603,6 +603,9 @@ export const AppConfig = mongoose.model(
       geminiEnabledModels: { type: [String], default: [] },
       geminiLastError: { type: String, default: "" },
       geminiLastCheckedAt: { type: Date, default: null },
+      /** Last reason the AI Tutor fell back to saved notes (cleared when an AI reply succeeds). */
+      tutorLastError: { type: String, default: "" },
+      tutorLastErrorAt: { type: Date, default: null },
       chatgptHostId: { type: String, default: "" },
       chatgptOauthClientId: { type: String, default: "" },
       chatgptEncryptedTokens: { type: String, default: "", select: false },

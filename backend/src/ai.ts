@@ -1,4 +1,4 @@
-import { Exam, KnowledgeSource, MemoryItem, Subject, Topic } from "./models.js";
+import { AppConfig, Exam, KnowledgeSource, MemoryItem, Subject, Topic } from "./models.js";
 import { completeChatGptResponse } from "./chatgpt-auth.js";
 import { completeGemini } from "./gemini-settings.js";
 import { getOpenAiSettings } from "./openai-settings.js";
@@ -14,6 +14,29 @@ export interface RetrievedChunk {
   title: string;
   text: string;
   score: number;
+}
+
+type ProviderResult = { text: string | null; error?: string };
+
+/** Shown above a reply that came from saved notes because no AI provider answered. */
+export const TUTOR_FALLBACK_NOTICE =
+  "*AI tutor is not available right now, so this reply uses saved ArivuVazhi notes only. Please try again later.*";
+
+/** Remember why the tutor fell back to local notes, so admins can see it on the AI page. */
+async function recordTutorFailure(reason: string) {
+  try {
+    await AppConfig.updateOne({ id: "app" }, { $set: { tutorLastError: reason, tutorLastErrorAt: new Date() } });
+  } catch {
+    // Never fail a student reply because the status write failed.
+  }
+}
+
+async function clearTutorFailure() {
+  try {
+    await AppConfig.updateOne({ id: "app", tutorLastError: { $nin: ["", null] } }, { $set: { tutorLastError: "" } });
+  } catch {
+    // Best effort only.
+  }
 }
 
 function tokenize(value: string): string[] {
@@ -146,7 +169,7 @@ async function completeWithChatGpt(
   user: string,
   image?: { mimeType: string; base64: string },
   options?: { webSearch?: boolean },
-): Promise<string | null> {
+): Promise<ProviderResult> {
   try {
     const openai = await getOpenAiSettings();
     const input = image
@@ -168,7 +191,7 @@ async function completeWithChatGpt(
         input,
         tools,
       });
-      return result.text || null;
+      return result.text ? { text: result.text } : { text: null, error: "ChatGPT returned an empty reply" };
     } catch (error) {
       // Plan/model may reject web_search — retry plain completion once.
       if (tools?.length) {
@@ -178,13 +201,14 @@ async function completeWithChatGpt(
           instructions: system,
           input,
         });
-        return result.text || null;
+        return result.text ? { text: result.text } : { text: null, error: "ChatGPT returned an empty reply" };
       }
       throw error;
     }
   } catch (error) {
-    console.warn(`ChatGPT tutor call failed: ${error instanceof Error ? error.message : "unknown"}`);
-    return null;
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.warn(`ChatGPT tutor call failed: ${message}`);
+    return { text: null, error: `ChatGPT: ${message}` };
   }
 }
 
@@ -193,11 +217,12 @@ async function completeWithProvider(
   user: string,
   provider: "openai" | "ollama",
   image?: { mimeType: string; base64: string },
-): Promise<string | null> {
+): Promise<ProviderResult> {
+  const label = provider === "openai" ? "OpenAI" : "Ollama";
   try {
     if (provider === "openai") {
       const openai = await getOpenAiSettings();
-      if (!openai.apiKey) return null;
+      if (!openai.apiKey) return { text: null, error: "OpenAI: no API key is set" };
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -221,9 +246,13 @@ async function completeWithProvider(
           ],
         }),
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        const failed = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+        return { text: null, error: `OpenAI: ${failed.error?.message || `HTTP ${response.status}`}` };
+      }
       const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-      return payload.choices?.[0]?.message?.content || null;
+      const text = payload.choices?.[0]?.message?.content || null;
+      return text ? { text } : { text: null, error: "OpenAI returned an empty reply" };
     }
     const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
       method: "POST",
@@ -237,11 +266,14 @@ async function completeWithProvider(
         ],
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { text: null, error: `Ollama: HTTP ${response.status}` };
     const payload = (await response.json()) as { message?: { content?: string } };
-    return payload.message?.content || null;
-  } catch {
-    return null;
+    const text = payload.message?.content || null;
+    return text ? { text } : { text: null, error: "Ollama returned an empty reply" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.warn(`${label} tutor call failed: ${message}`);
+    return { text: null, error: `${label}: ${message}` };
   }
 }
 
@@ -329,29 +361,47 @@ ${memory.join("; ") || "none"}`;
     : query;
   let providerUsed: AiProviderName = "local";
   let answer: string | null = null;
+  // Why no AI answered this turn; stays empty when an AI provider replied.
+  let fallbackReason = "";
   if (input.provider === "chatgpt") {
-    answer = await completeWithChatGpt(system, userPayload, image, { webSearch: freshAsk });
+    const result = await completeWithChatGpt(system, userPayload, image, { webSearch: freshAsk });
+    answer = result.text;
+    fallbackReason = result.error || "";
     if (answer) providerUsed = "chatgpt";
   } else if (input.provider === "gemini") {
     try {
       answer = await completeGemini({ system, user: userPayload, image });
       if (answer) providerUsed = "gemini";
+      else fallbackReason = "Gemini returned an empty reply";
     } catch (error) {
-      console.warn(`Gemini tutor call failed: ${error instanceof Error ? error.message : "unknown"}`);
+      const message = error instanceof Error ? error.message : "unknown error";
+      console.warn(`Gemini tutor call failed: ${message}`);
+      fallbackReason = `Gemini: ${message}`;
     }
   } else if (input.provider === "openai" || input.provider === "ollama") {
-    answer = await completeWithProvider(system, userPayload, input.provider, image);
+    const result = await completeWithProvider(system, userPayload, input.provider, image);
+    answer = result.text;
+    fallbackReason = result.error || "";
     if (answer) providerUsed = input.provider;
+  } else {
+    fallbackReason = "AI provider is set to Local (AI off) in admin AI settings";
+  }
+  const aiAvailable = Boolean(answer);
+  if (aiAvailable) {
+    void clearTutorFailure();
+  } else {
+    void recordTutorFailure(fallbackReason || "No AI provider replied");
   }
   if (!answer && image) {
     answer =
       "Image questions need ChatGPT plan sign-in, Gemini API key, or an OpenAI API key with vision. No image-capable provider is available right now.";
   }
-  if (!answer) answer = localAnswer(query, chunks, memory, syllabus);
+  if (!answer) answer = `${TUTOR_FALLBACK_NOTICE}\n\n${localAnswer(query, chunks, memory, syllabus)}`;
   answer = polishTutorAnswer(answer);
   return {
     answer,
     providerUsed,
+    aiAvailable,
     sources: chunks.map((chunk) => ({ id: chunk.id, title: chunk.title })),
     tokens: Math.ceil((input.message.length + answer.length) / 4),
   };

@@ -65,6 +65,11 @@ type Settings = {
     lastCheckedAt?: string | null;
   };
   planUsage?: PlanUsage | null;
+  /** Last reason the AI Tutor fell back to saved notes; empty once an AI reply succeeds. */
+  tutor?: {
+    lastError: string;
+    lastErrorAt?: string | null;
+  };
   localUsage?: {
     todayRequests: number;
     todayTokens: number;
@@ -348,6 +353,12 @@ export default function AiPage() {
       {message && <Alert severity="success" sx={{ mb: 2 }}>{message}</Alert>}
       {chatgpt?.lastError && !localError && <Alert severity="warning" sx={{ mb: 2 }}>{chatgpt.lastError}</Alert>}
       {gemini?.lastError && !localError && <Alert severity="warning" sx={{ mb: 2 }}>{gemini.lastError}</Alert>}
+      {data?.tutor?.lastError && !localError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          AI Tutor is answering from saved notes only (no AI). Last reason: {data.tutor.lastError}
+          {data.tutor.lastErrorAt ? ` · ${new Date(data.tutor.lastErrorAt).toLocaleString("en-IN")}` : ""}
+        </Alert>
+      )}
 
       <Card sx={{ p: 2.5, mb: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>

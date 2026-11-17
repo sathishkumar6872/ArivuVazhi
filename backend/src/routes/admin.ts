@@ -820,6 +820,10 @@ adminRouter.get(
           lastCheckedAt: settings?.geminiLastCheckedAt || null,
         },
         planUsage,
+        tutor: {
+          lastError: settings?.tutorLastError || "",
+          lastErrorAt: settings?.tutorLastErrorAt || null,
+        },
         localUsage: {
           todayRequests: today[0]?.requests || 0,
           todayTokens: today[0]?.tokens || 0,
