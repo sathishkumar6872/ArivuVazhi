@@ -144,6 +144,18 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
 
   @override
   Widget build(BuildContext context) {
+    // Android back: forgot/register/verify → login → welcome → exit.
+    return PopScope(
+      canPop: mode == _AuthMode.welcome,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _setMode(mode == _AuthMode.login ? _AuthMode.welcome : _AuthMode.login);
+      },
+      child: _page(context),
+    );
+  }
+
+  Widget _page(BuildContext context) {
     final palette = context.palette;
 
     if (mode == _AuthMode.welcome) {
@@ -545,6 +557,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> with SafeState {
 
   @override
   Widget build(BuildContext context) {
+    // Android back: previous onboarding step → intro slides → exit.
+    return PopScope(
+      canPop: !started,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() {
+          if (step > 0) {
+            step -= 1;
+          } else {
+            started = false;
+          }
+        });
+      },
+      child: _page(context),
+    );
+  }
+
+  Widget _page(BuildContext context) {
     final palette = context.palette;
     if (!started) {
       final slide = introSlides[intro];

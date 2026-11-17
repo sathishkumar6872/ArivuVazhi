@@ -195,6 +195,29 @@ class _ShellState extends State<Shell> {
     setState(() => stack.removeLast());
   }
 
+  DateTime? _lastBackOnHome;
+
+  /// Android back / swipe-back: previous screen → Home tab → press again to exit.
+  void _systemBack() {
+    if (stacks[tab]!.length > 1) {
+      back();
+      return;
+    }
+    if (tab != TabName.home) {
+      goTab(TabName.home.name);
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastBackOnHome != null && now.difference(_lastBackOnHome!) < const Duration(seconds: 2)) {
+      SystemNavigator.pop();
+      return;
+    }
+    _lastBackOnHome = now;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Press back again to exit'), duration: Duration(seconds: 2)));
+  }
+
   /// A tab press always lands on that tab's first screen, not on whatever was opened inside it earlier.
   void goTab(String name) {
     final next = TabName.values.byName(name);
@@ -268,12 +291,11 @@ class _ShellState extends State<Shell> {
     final current = route;
     final fullScreen = current.name == 'chat' || current.name == 'quiz' || current.name == 'mockRun';
     final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
-    final canGoBack = stacks[tab]!.length > 1;
     return PopScope(
-      // Android back: go back inside the tab first; on a tab root, leave the app.
-      canPop: !canGoBack,
+      // The app handles every Android back itself (see _systemBack), so it never closes by accident.
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) back();
+        if (!didPop) _systemBack();
       },
       child: Column(children: [
         Expanded(

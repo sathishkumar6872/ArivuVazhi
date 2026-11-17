@@ -241,9 +241,15 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
     }
   }
 
+  double _lastInset = 0;
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    // Keep the latest message visible when the keyboard opens and the list shrinks.
+    final inset = MediaQuery.of(context).viewInsets.bottom;
+    if (inset > _lastInset) _scrollToEnd();
+    _lastInset = inset;
     return AppScreen(
       padded: false,
       body: Column(children: [
