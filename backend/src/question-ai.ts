@@ -26,9 +26,15 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
 
 const generatedQuestionSchema = z.object({
   stem: z.string().min(8).max(800),
-  options: z
-    .array(z.object({ key: z.enum(["A", "B", "C", "D"]), text: z.string().min(1).max(280) }))
-    .length(4),
+  // AI sometimes returns options as {"A": "...", ...} or ["...", ...]: normalise to [{ key, text }].
+  options: z.preprocess(
+    (value) => {
+      if (Array.isArray(value)) return value.map((item, index) => (typeof item === "string" ? { key: "ABCD"[index], text: item } : item));
+      if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, text]) => ({ key: key.trim().toUpperCase(), text }));
+      return value;
+    },
+    z.array(z.object({ key: z.enum(["A", "B", "C", "D"]), text: z.string().min(1).max(280) })).length(4),
+  ),
   correctKey: z.enum(["A", "B", "C", "D"]),
   explanation: z.string().min(8).max(1200),
   difficulty: z.enum(["easy", "medium", "hard"]).optional(),
