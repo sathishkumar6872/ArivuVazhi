@@ -1,0 +1,43 @@
+name: student
+description: "ArivuVazhi student mobile app (Flutter)."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_local_notifications: ^23.0.2
+  flutter_secure_storage: ^11.2.0
+  http: ^1.6.0
+  material_ui: ^1.1.0
+  shared_preferences: ^2.5.6
+  timezone: ^0.11.2
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/brand-use/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/icon.png"
+  adaptive_icon_background: "#E6F4FE"
+  adaptive_icon_foreground: "assets/android-icon-foreground.png"
+  adaptive_icon_monochrome: "assets/android-icon-monochrome.png"
+  web:
+    generate: true
+    image_path: "assets/icon.png"
+    background_color: "#E8F5EE"
+    theme_color: "#0B3D2E"
