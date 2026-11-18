@@ -26,6 +26,8 @@ import {
   getChatGptPlanUsage,
   getChatGptStatus,
   refreshChatGptPlanModels,
+  makeChatGptBackupPrimary,
+  removeChatGptBackup,
   signOutChatGpt,
   startChatGptSignIn,
   testChatGptConnection,
@@ -829,7 +831,6 @@ adminRouter.get(
           todayTokens: today[0]?.tokens || 0,
           totalRequests: allTime[0]?.requests || 0,
           totalTokens: allTime[0]?.tokens || 0,
-          dailyStudentLimit: settings?.perUserDailyAiLimit || 40,
         },
       },
     });
@@ -840,7 +841,28 @@ adminRouter.post(
   "/ai/chatgpt/authorize",
   wrap(async (req, res) => {
     if (req.user!.role !== "admin") throw new HttpError(403, "Only an admin can connect ChatGPT", "FORBIDDEN");
-    res.json({ data: await startChatGptSignIn() });
+    const body = z.object({ backup: z.boolean().optional() }).parse(req.body || {});
+    res.json({ data: await startChatGptSignIn({ backup: body.backup }) });
+  }),
+);
+
+adminRouter.post(
+  "/ai/chatgpt/backups/:id/primary",
+  wrap(async (req, res) => {
+    if (req.user!.role !== "admin") throw new HttpError(403, "Only an admin can change the main ChatGPT account", "FORBIDDEN");
+    await makeChatGptBackupPrimary(String(req.params.id));
+    await audit(req.user!.id, "ai_chatgpt_make_primary", "config", "app", {});
+    res.json({ data: await getChatGptStatus() });
+  }),
+);
+
+adminRouter.delete(
+  "/ai/chatgpt/backups/:id",
+  wrap(async (req, res) => {
+    if (req.user!.role !== "admin") throw new HttpError(403, "Only an admin can remove a ChatGPT account", "FORBIDDEN");
+    const result = await removeChatGptBackup(String(req.params.id));
+    await audit(req.user!.id, "ai_chatgpt_backup_remove", "config", "app", { revokedAtOpenAI: result.revoked });
+    res.json({ data: { ...result, ...(await getChatGptStatus()) } });
   }),
 );
 

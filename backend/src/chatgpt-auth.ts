@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { config } from "./config.js";
 import { decryptSecret, encryptSecret } from "./crypto-secret.js";
+import { HttpError } from "./http.js";
 import { AppConfig } from "./models.js";
 
 /**
@@ -18,6 +19,11 @@ const SCOPES = ["openid", "profile", "email", "offline_access", "resource.invoke
 const APP_NAME = "ArivuVazhi";
 const ATTEMPT_TTL_MS = 10 * 60_000;
 const REFRESH_MARGIN_MS = 5 * 60_000;
+/** Extra ChatGPT sign-ins used as fallbacks (main account + this many). */
+const MAX_BACKUPS = 2;
+/** An account that hit a plan/rate limit is tried last for this long. */
+const LIMIT_COOLDOWN_MS = 5 * 60_000;
+const LIMIT_ERROR = /limit|quota|rate|429|usage|exceeded|too many/i;
 const UNUSABLE_REFRESH = new Set([
   "invalid_grant",
   "invalid_refresh_token",
@@ -44,7 +50,27 @@ interface PendingAttempt {
   redirectUri: string;
   savedClientId: string | null;
   createdAt: number;
+  /** True when this sign-in adds a backup account instead of the main one. */
+  backup: boolean;
 }
+
+/** Which stored sign-in a token belongs to. */
+type AccountRef = { kind: "primary" } | { kind: "backup"; id: string };
+type AccountRecord = { ref: AccountRef; label: string; tokens: StoredTokens; clientId: string };
+
+/** A stored backup sign-in as kept in AppConfig.chatgptBackupAccounts. */
+type BackupRow = {
+  id: string;
+  clientId: string;
+  encryptedTokens: string;
+  account: string;
+  scopes: string[];
+  status: "connected" | "error";
+  lastError: string;
+  connectedAt: Date | null;
+};
+
+const refKey = (ref: AccountRef) => (ref.kind === "primary" ? "primary" : `backup:${ref.id}`);
 
 const pending = new Map<string, PendingAttempt>();
 
@@ -103,7 +129,12 @@ function toTime(value: unknown): number | null {
 }
 
 async function getDoc() {
-  return AppConfig.findOne({ id: "app" }).select("+chatgptEncryptedTokens");
+  return AppConfig.findOne({ id: "app" }).select("+chatgptEncryptedTokens +chatgptBackupAccounts");
+}
+
+async function backupRows() {
+  const doc = await AppConfig.findOne({ id: "app" }).select("+chatgptBackupAccounts").lean();
+  return doc?.chatgptBackupAccounts || [];
 }
 
 async function ensureHostId(): Promise<string> {
@@ -119,17 +150,24 @@ export function callbackRedirectUri(): string {
   return `http://127.0.0.1:${config.port}/auth/callback`;
 }
 
-/** Starts a browser sign-in and returns the OpenAI authorization URL to open. */
-export async function startChatGptSignIn(): Promise<{ url: string }> {
+/**
+ * Starts a browser sign-in and returns the OpenAI authorization URL to open.
+ * `backup: true` adds a fallback account; it always gets its own fresh app registration.
+ */
+export async function startChatGptSignIn(options: { backup?: boolean } = {}): Promise<{ url: string }> {
+  const backup = Boolean(options.backup);
   const [hostId, doc, endpoints] = await Promise.all([ensureHostId(), getDoc(), discovery()]);
   for (const [state, attempt] of pending) if (Date.now() - attempt.createdAt > ATTEMPT_TTL_MS) pending.delete(state);
+  if (backup && (doc?.chatgptBackupAccounts?.length || 0) >= MAX_BACKUPS) {
+    throw new HttpError(400, `Up to ${MAX_BACKUPS} backup ChatGPT accounts can be added. Remove one first.`, "CHATGPT_BACKUP_LIMIT");
+  }
 
   const state = base64url(crypto.randomBytes(24));
   const nonce = base64url(crypto.randomBytes(24));
   const verifier = base64url(crypto.randomBytes(48));
-  const savedClientId = doc?.chatgptOauthClientId || null;
+  const savedClientId = backup ? null : doc?.chatgptOauthClientId || null;
   const redirectUri = callbackRedirectUri();
-  pending.set(state, { verifier, nonce, redirectUri, savedClientId, createdAt: Date.now() });
+  pending.set(state, { verifier, nonce, redirectUri, savedClientId, createdAt: Date.now(), backup });
 
   const params = new URLSearchParams({
     client_id: savedClientId ?? "dynamic_agent_client",
@@ -196,10 +234,13 @@ export async function completeChatGptSignIn(query: Record<string, unknown>): Pro
       query.error === "access_denied"
         ? "You declined access in ChatGPT, so nothing was connected."
         : `ChatGPT sign-in failed: ${typeof query.error_description === "string" ? query.error_description : query.error}`;
-    await AppConfig.updateOne(
-      { id: "app" },
-      { $set: { chatgptStatus: "error", chatgptLastError: message, chatgptLastCheckedAt: new Date() } },
-    );
+    // A failed backup sign-in must not mark the main account as broken.
+    if (!attempt.backup) {
+      await AppConfig.updateOne(
+        { id: "app" },
+        { $set: { chatgptStatus: "error", chatgptLastError: message, chatgptLastCheckedAt: new Date() } },
+      );
+    }
     return { ok: false, message };
   }
 
@@ -213,7 +254,7 @@ export async function completeChatGptSignIn(query: Record<string, unknown>): Pro
     return { ok: false, message: "OpenAI did not complete the registration. Please try again." };
   }
 
-  await AppConfig.updateOne({ id: "app" }, { $set: { chatgptOauthClientId: clientId } });
+  if (!attempt.backup) await AppConfig.updateOne({ id: "app" }, { $set: { chatgptOauthClientId: clientId } });
 
   const exchange = await tokenRequest({
     grant_type: "authorization_code",
@@ -232,6 +273,7 @@ export async function completeChatGptSignIn(query: Record<string, unknown>): Pro
   const tokens = storedFromTokenResponse(exchange.data, identity);
   const planEnabled = tokens.scopes.includes(PLAN_SCOPE);
   const now = new Date();
+  if (attempt.backup) return saveBackupSignIn(clientId, tokens, identity.email, planEnabled);
   await AppConfig.updateOne(
     { id: "app" },
     {
@@ -259,13 +301,74 @@ export async function completeChatGptSignIn(query: Record<string, unknown>): Pro
   return { ok: true, email: identity.email, planEnabled };
 }
 
+/** Stores (or replaces, for the same email) a backup account after its sign-in. */
+async function saveBackupSignIn(
+  clientId: string,
+  tokens: StoredTokens,
+  email: string | null,
+  planEnabled: boolean,
+): Promise<ChatGptCallbackResult> {
+  if (!planEnabled) {
+    return { ok: false, message: "Backup signed in, but ChatGPT plan usage was not allowed. Add it again and allow plan usage." };
+  }
+  const others = (await backupRows()).filter((row) => !email || row.account !== email);
+  if (others.length >= MAX_BACKUPS) {
+    return { ok: false, message: `Up to ${MAX_BACKUPS} backup ChatGPT accounts can be added. Remove one first.` };
+  }
+  const entry = {
+    id: crypto.randomUUID(),
+    clientId,
+    encryptedTokens: encryptSecret(JSON.stringify(tokens)),
+    account: email || "",
+    scopes: tokens.scopes,
+    status: "connected" as const,
+    lastError: "",
+    connectedAt: new Date(),
+  };
+  await AppConfig.updateOne({ id: "app" }, { $set: { chatgptBackupAccounts: [...others, entry] } });
+  return { ok: true, email, planEnabled: true };
+}
+
 async function readTokens(): Promise<{ tokens: StoredTokens; clientId: string } | null> {
   const doc = await getDoc();
   if (!doc?.chatgptEncryptedTokens || !doc.chatgptOauthClientId) return null;
   return { tokens: JSON.parse(decryptSecret(doc.chatgptEncryptedTokens)) as StoredTokens, clientId: doc.chatgptOauthClientId };
 }
 
+/** Signed-in backup accounts, in the order they were added. Unreadable rows are skipped. */
+async function readBackups(): Promise<AccountRecord[]> {
+  const records: AccountRecord[] = [];
+  for (const row of await backupRows()) {
+    if (!row.encryptedTokens || !row.clientId) continue;
+    try {
+      records.push({
+        ref: { kind: "backup", id: row.id },
+        label: row.account || "backup",
+        tokens: JSON.parse(decryptSecret(row.encryptedTokens)) as StoredTokens,
+        clientId: row.clientId,
+      });
+    } catch (error) {
+      console.warn(`ChatGPT backup ${row.account || row.id} could not be read: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+  return records;
+}
+
+/**
+ * Provider to use once ChatGPT is turned off: a non-ChatGPT provider stays as it is,
+ * and ChatGPT hands over to Gemini when Gemini is enabled (not straight to "AI off").
+ */
+async function providerAfterChatGptOff(): Promise<"local" | "gemini" | "openai" | "ollama"> {
+  const settings = await AppConfig.findOne({ id: "app" }).select("aiProvider geminiEnabled").lean();
+  const current = settings?.aiProvider || "local";
+  if (current !== "chatgpt") return current;
+  return settings?.geminiEnabled ? "gemini" : "local";
+}
+
 async function signedOut(message: string): Promise<never> {
+  // Keep ChatGPT on when a backup account can still answer.
+  const backupsLeft = (await readBackups()).length > 0;
+  const aiProvider = backupsLeft ? null : await providerAfterChatGptOff();
   await AppConfig.updateOne(
     { id: "app" },
     {
@@ -274,18 +377,47 @@ async function signedOut(message: string): Promise<never> {
         chatgptStatus: "error",
         chatgptLastError: message,
         chatgptLastCheckedAt: new Date(),
-        chatgptEnabled: false,
-        aiProvider: "local",
+        ...(aiProvider ? { chatgptEnabled: false, aiProvider } : {}),
       },
     },
   );
   throw new Error(message);
 }
 
-let refreshing: Promise<string> | null = null;
+/** Forget a sign-in that can no longer be renewed (main or backup), then fail the call. */
+async function accountSignedOut(ref: AccountRef, message: string): Promise<never> {
+  if (ref.kind === "primary") return signedOut(message);
+  await AppConfig.updateOne(
+    { id: "app", "chatgptBackupAccounts.id": ref.id },
+    {
+      $set: {
+        "chatgptBackupAccounts.$.encryptedTokens": "",
+        "chatgptBackupAccounts.$.status": "error",
+        "chatgptBackupAccounts.$.lastError": message,
+      },
+    },
+  );
+  throw new Error(message);
+}
 
-async function refresh(current: StoredTokens, clientId: string): Promise<string> {
-  if (!current.refreshToken) return signedOut("Your ChatGPT sign-in expired. Continue with ChatGPT again under AI / ChatGPT.");
+async function saveAccountTokens(ref: AccountRef, next: StoredTokens) {
+  const encrypted = encryptSecret(JSON.stringify(next));
+  if (ref.kind === "primary") {
+    await AppConfig.updateOne({ id: "app" }, { $set: { chatgptEncryptedTokens: encrypted, chatgptScopes: next.scopes } });
+    return;
+  }
+  await AppConfig.updateOne(
+    { id: "app", "chatgptBackupAccounts.id": ref.id },
+    { $set: { "chatgptBackupAccounts.$.encryptedTokens": encrypted, "chatgptBackupAccounts.$.scopes": next.scopes } },
+  );
+}
+
+/** One renewal at a time per account, so a rotating refresh token is only used once. */
+const refreshing = new Map<string, Promise<string>>();
+
+async function refresh(record: AccountRecord): Promise<string> {
+  const { ref, tokens: current, clientId } = record;
+  if (!current.refreshToken) return accountSignedOut(ref, "Your ChatGPT sign-in expired. Continue with ChatGPT again under AI / ChatGPT.");
   const res = await tokenRequest({
     grant_type: "refresh_token",
     client_id: clientId,
@@ -295,7 +427,7 @@ async function refresh(current: StoredTokens, clientId: string): Promise<string>
   if (!res.ok || typeof res.data.access_token !== "string") {
     const code = String(res.data.error ?? res.data.code ?? "");
     if (UNUSABLE_REFRESH.has(code) || code === "invalid_client") {
-      return signedOut("Your ChatGPT sign-in is no longer valid. Continue with ChatGPT again under AI / ChatGPT.");
+      return accountSignedOut(ref, "Your ChatGPT sign-in is no longer valid. Continue with ChatGPT again under AI / ChatGPT.");
     }
     throw new Error(`Could not renew the ChatGPT sign-in (${res.status})`);
   }
@@ -304,21 +436,16 @@ async function refresh(current: StoredTokens, clientId: string): Promise<string>
       ? await verifyIdToken(res.data.id_token, clientId, null)
       : { subject: current.subject, email: current.email };
   if (identity.subject !== current.subject) {
-    return signedOut("OpenAI returned a different ChatGPT account. Continue with ChatGPT again.");
+    return accountSignedOut(ref, "OpenAI returned a different ChatGPT account. Continue with ChatGPT again.");
   }
   const next = storedFromTokenResponse(res.data, identity, current);
-  await AppConfig.updateOne(
-    { id: "app" },
-    { $set: { chatgptEncryptedTokens: encryptSecret(JSON.stringify(next)), chatgptScopes: next.scopes } },
-  );
+  await saveAccountTokens(ref, next);
   return next.accessToken;
 }
 
-/** Returns a usable access token, renewing it shortly before expiry. */
-export async function getChatGptAccessToken(): Promise<string> {
-  const record = await readTokens();
-  if (!record) throw new Error("ChatGPT is not connected. Use Continue with ChatGPT under AI / ChatGPT.");
-  const { tokens, clientId } = record;
+/** Returns a usable access token for one account, renewing it shortly before expiry. */
+async function accessTokenFor(record: AccountRecord): Promise<string> {
+  const { tokens } = record;
   if (!tokens.scopes.includes(PLAN_SCOPE)) {
     throw new Error("ArivuVazhi is not allowed to use your ChatGPT plan. Continue with ChatGPT again and allow plan usage.");
   }
@@ -326,10 +453,114 @@ export async function getChatGptAccessToken(): Promise<string> {
   const expiringSoon = tokens.expiresAt - now < REFRESH_MARGIN_MS;
   const refreshAllowed = !tokens.earliestRefreshAt || tokens.earliestRefreshAt <= now || tokens.expiresAt <= now;
   if (!expiringSoon || !refreshAllowed) return tokens.accessToken;
-  refreshing ??= refresh(tokens, clientId).finally(() => {
-    refreshing = null;
-  });
-  return refreshing;
+  const key = refKey(record.ref);
+  let pendingRefresh = refreshing.get(key);
+  if (!pendingRefresh) {
+    pendingRefresh = refresh(record).finally(() => refreshing.delete(key));
+    refreshing.set(key, pendingRefresh);
+  }
+  return pendingRefresh;
+}
+
+/** Returns a usable access token for the main account. */
+export async function getChatGptAccessToken(): Promise<string> {
+  const record = await readTokens();
+  if (!record) throw new Error("ChatGPT is not connected. Use Continue with ChatGPT under AI / ChatGPT.");
+  return accessTokenFor({ ref: { kind: "primary" }, label: "main", ...record });
+}
+
+/**
+ * Makes a backup the main ChatGPT account. The old main account takes the backup's
+ * place in the list, so nothing is signed out. Plan models are reloaded for the new main.
+ */
+export async function makeChatGptBackupPrimary(id: string) {
+  const [doc, rows] = await Promise.all([getDoc(), backupRows()]);
+  const chosen = rows.find((row) => row.id === id);
+  if (!chosen) throw new HttpError(404, "Backup ChatGPT account not found", "NOT_FOUND");
+  if (!chosen.encryptedTokens || !chosen.clientId) {
+    throw new HttpError(400, "This backup is signed out. Remove it and add it again.", "CHATGPT_BACKUP_SIGNED_OUT");
+  }
+  const oldMain =
+    doc?.chatgptEncryptedTokens && doc.chatgptOauthClientId
+      ? {
+          id: crypto.randomUUID(),
+          clientId: doc.chatgptOauthClientId,
+          encryptedTokens: doc.chatgptEncryptedTokens,
+          account: doc.chatgptAccount || "",
+          scopes: doc.chatgptScopes || [],
+          status: doc.chatgptStatus === "connected" ? ("connected" as const) : ("error" as const),
+          lastError: doc.chatgptLastError || "",
+          connectedAt: doc.chatgptConnectedAt || null,
+        }
+      : null;
+  const backups: BackupRow[] = rows.flatMap((row): BackupRow[] =>
+    row.id === id
+      ? oldMain
+        ? [oldMain]
+        : []
+      : [
+          {
+            id: row.id,
+            clientId: row.clientId,
+            encryptedTokens: row.encryptedTokens,
+            account: row.account,
+            scopes: row.scopes,
+            status: row.status,
+            lastError: row.lastError,
+            connectedAt: row.connectedAt || null,
+          },
+        ],
+  );
+  const planEnabled = (chosen.scopes || []).includes(PLAN_SCOPE);
+  await AppConfig.updateOne(
+    { id: "app" },
+    {
+      $set: {
+        chatgptOauthClientId: chosen.clientId,
+        chatgptEncryptedTokens: chosen.encryptedTokens,
+        chatgptAccount: chosen.account || "",
+        chatgptScopes: chosen.scopes || [],
+        chatgptStatus: chosen.status === "connected" && planEnabled ? "connected" : "error",
+        chatgptLastError: chosen.lastError || "",
+        chatgptConnectedAt: chosen.connectedAt || new Date(),
+        chatgptLastCheckedAt: new Date(),
+        chatgptModels: [],
+        chatgptBackupAccounts: backups,
+      },
+    },
+  );
+  // Account keys changed places; forget per-account limit notes.
+  limitedUntil.clear();
+  try {
+    await refreshChatGptPlanModels();
+  } catch (error) {
+    console.warn(`ChatGPT model list after switching main account failed: ${error instanceof Error ? error.message : "unknown"}`);
+  }
+}
+
+/** Removes a backup account and revokes its renewable session at OpenAI. */
+export async function removeChatGptBackup(id: string): Promise<{ revoked: boolean }> {
+  const record = (await readBackups()).find((item) => item.ref.kind === "backup" && item.ref.id === id);
+  const revoked = record ? await revokeRefreshToken(record.tokens.refreshToken, record.clientId) : false;
+  await AppConfig.updateOne({ id: "app" }, { $pull: { chatgptBackupAccounts: { id } } });
+  return { revoked };
+}
+
+async function revokeRefreshToken(refreshToken: string | null, clientId: string): Promise<boolean> {
+  if (!refreshToken) return false;
+  try {
+    const endpoint = (await discovery()).revocation_endpoint;
+    if (!endpoint) return false;
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: refreshToken, token_type_hint: "refresh_token", client_id: clientId }),
+    });
+    return res.ok;
+  } catch (error) {
+    console.warn(`ChatGPT token revocation failed: ${error instanceof Error ? error.message : "unknown"}`);
+    return false;
+  }
 }
 
 export async function getChatGptStatus() {
@@ -338,6 +569,14 @@ export async function getChatGptStatus() {
   const hasTokens = Boolean(doc?.chatgptEncryptedTokens);
   const planEnabled = scopes.includes(PLAN_SCOPE);
   return {
+    backups: (doc?.chatgptBackupAccounts || []).map((row) => ({
+      id: row.id,
+      account: row.account || "",
+      status: row.encryptedTokens ? row.status || "connected" : "error",
+      lastError: row.lastError || "",
+      connectedAt: row.connectedAt || null,
+    })),
+    maxBackups: MAX_BACKUPS,
     connected: hasTokens && doc?.chatgptStatus === "connected" && planEnabled,
     signedIn: hasTokens,
     planEnabled,
@@ -581,16 +820,52 @@ export type ChatGptCompletion = {
   usage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
 };
 
-/** ChatGPT plan Responses API requires stream:true for several models (e.g. gpt-6-luna). */
-export async function completeChatGptResponse(input: {
+type ChatGptRequest = {
   token?: string;
   model: string;
   instructions?: string;
   input: ChatGptResponseInput;
   /** Optional Responses API tools (e.g. web_search) for fresher current-affairs answers. */
   tools?: Array<Record<string, unknown>>;
-}): Promise<ChatGptCompletion> {
-  const token = input.token || (await getChatGptAccessToken());
+};
+
+/** Account key → time until which it is tried last (it recently hit a plan/rate limit). */
+const limitedUntil = new Map<string, number>();
+
+/**
+ * Calls ChatGPT with the main account; if that fails (limit, expired sign-in, any error),
+ * tries each backup account in turn. With a `token` only that token is used.
+ */
+export async function completeChatGptResponse(input: ChatGptRequest): Promise<ChatGptCompletion> {
+  if (input.token) return callChatGptResponses(input.token, input);
+  const main = await readTokens();
+  const accounts: AccountRecord[] = [
+    ...(main ? [{ ref: { kind: "primary" } as AccountRef, label: "main", ...main }] : []),
+    ...(await readBackups()),
+  ];
+  if (!accounts.length) throw new Error("ChatGPT is not connected. Use Continue with ChatGPT under AI / ChatGPT.");
+  const now = Date.now();
+  const resting = (record: AccountRecord) => (limitedUntil.get(refKey(record.ref)) || 0) > now;
+  const ordered = [...accounts.filter((record) => !resting(record)), ...accounts.filter(resting)];
+
+  let lastError: unknown = null;
+  for (const [index, record] of ordered.entries()) {
+    try {
+      const result = await callChatGptResponses(await accessTokenFor(record), input);
+      limitedUntil.delete(refKey(record.ref));
+      return result;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (LIMIT_ERROR.test(message)) limitedUntil.set(refKey(record.ref), Date.now() + LIMIT_COOLDOWN_MS);
+      if (index < ordered.length - 1) console.warn(`ChatGPT account ${record.label} failed (${message}); trying the next account.`);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("ChatGPT call failed");
+}
+
+/** ChatGPT plan Responses API requires stream:true for several models (e.g. gpt-6-luna). */
+async function callChatGptResponses(token: string, input: ChatGptRequest): Promise<ChatGptCompletion> {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -762,32 +1037,21 @@ export async function testChatGptConnection() {
 
 /** Revokes the renewable session at OpenAI, then forgets the tokens. */
 export async function signOutChatGpt(): Promise<{ revoked: boolean }> {
-  const record = await readTokens();
-  let revoked = false;
-  if (record?.tokens.refreshToken) {
-    try {
-      const endpoint = (await discovery()).revocation_endpoint;
-      if (endpoint) {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            token: record.tokens.refreshToken,
-            token_type_hint: "refresh_token",
-            client_id: record.clientId,
-          }),
-        });
-        revoked = res.ok;
-      }
-    } catch (error) {
-      console.warn(`ChatGPT token revocation failed: ${error instanceof Error ? error.message : "unknown"}`);
-    }
-  }
+  // Tokens saved under another ENCRYPTION_KEY cannot be read: skip revoking, still sign out.
+  const record = await readTokens().catch((error) => {
+    console.warn(`ChatGPT sign-out: stored tokens unreadable, not revoked at OpenAI: ${error instanceof Error ? error.message : "unknown"}`);
+    return null;
+  });
+  const revoked = record ? await revokeRefreshToken(record.tokens.refreshToken, record.clientId) : false;
+  const aiProvider = await providerAfterChatGptOff();
   await AppConfig.updateOne(
     { id: "app" },
     {
       $set: {
         chatgptEncryptedTokens: "",
+        // Forget the app registration too: it belongs to the workspace of the account that first
+        // signed in, so keeping it makes any other account fail with "workspace_scope_denied".
+        chatgptOauthClientId: "",
         chatgptAccount: "",
         chatgptScopes: [],
         chatgptModels: [],
@@ -796,7 +1060,7 @@ export async function signOutChatGpt(): Promise<{ revoked: boolean }> {
         chatgptConnectedAt: null,
         chatgptLastCheckedAt: new Date(),
         chatgptEnabled: false,
-        aiProvider: "local",
+        aiProvider,
       },
     },
   );

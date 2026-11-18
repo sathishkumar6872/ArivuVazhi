@@ -144,8 +144,13 @@ async function syllabusOutline(examId?: string, query = ""): Promise<string> {
     const label = subject.nameTa || subject.nameEn || subject.name;
     return names.length ? `- ${label}: ${names.join("; ")}` : `- ${label}`;
   });
-  return `ArivuVazhi syllabus outline for ${exam.name} (${exam.code}):\n${lines.join("\n")}\n(Study guidance from catalogue. Mention tnpsc.gov.in only if the learner asks about official notification wording.)`;
+  return `ArivuVazhi syllabus outline for ${exam.name} (${exam.code}):\n${lines.join("\n")}`;
 }
+
+/** Instruction for the AI about the syllabus outline. Kept out of the outline itself so the
+ * local (no-AI) fallback never shows it to students. */
+const SYLLABUS_AI_NOTE =
+  "(Study guidance from catalogue. Mention tnpsc.gov.in only if the learner asks about official notification wording.)";
 
 function localAnswer(message: string, chunks: RetrievedChunk[], memory: string[], syllabus = ""): string {
   const memoryLine = memory.length ? `\n\nI am keeping this in mind from your learning memory: ${memory.join("; ")}.` : "";
@@ -331,7 +336,7 @@ export async function tutorReply(input: {
   ]);
   const memory = memoryDocs.map((item) => item.text);
   const context =
-    [chunks.map((chunk) => `[${chunk.title}] ${chunk.text}`).join("\n\n"), syllabus]
+    [chunks.map((chunk) => `[${chunk.title}] ${chunk.text}`).join("\n\n"), syllabus ? `${syllabus}\n${SYLLABUS_AI_NOTE}` : ""]
       .filter(Boolean)
       .join("\n\n") || "No approved source matched for this turn.";
   const replyStyle = detectStudentLanguage(input.message);
@@ -370,7 +375,7 @@ ${memory.join("; ") || "none"}`;
     if (answer) providerUsed = "chatgpt";
   } else if (input.provider === "gemini") {
     try {
-      answer = await completeGemini({ system, user: userPayload, image });
+      answer = await completeGemini({ system, user: userPayload, image, fast: true });
       if (answer) providerUsed = "gemini";
       else fallbackReason = "Gemini returned an empty reply";
     } catch (error) {

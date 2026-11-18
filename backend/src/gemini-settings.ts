@@ -11,6 +11,9 @@ const AUTO_CHAIN = [
   "gemini-2.5-flash-lite",
 ];
 const FALLBACK_MODELS = [...AUTO_CHAIN];
+/** Fast (tutor) mode: max wait for one model, and for the whole retry chain. */
+const FAST_ATTEMPT_MS = 15_000;
+const FAST_TOTAL_MS = 30_000;
 const RETIRED_MODELS = new Set([
   "gemini-2.5-flash",
   "gemini-2.5-pro",
@@ -124,12 +127,46 @@ export async function listGeminiModels(apiKey?: string): Promise<string[]> {
   return models.length ? models : FALLBACK_MODELS;
 }
 
+/** Models that rejected `thinkingConfig` (e.g. thinking-only models); they are called without it. */
+const thinkingConfigRejected = new Set<string>();
+
+class GeminiTimeoutError extends Error {}
+
 async function generateOnce(input: {
   key: string;
   model: string;
   system: string;
   user: string;
   image?: { mimeType: string; base64: string };
+  /** Abort the call after this many ms (fast mode). */
+  timeoutMs?: number;
+  /** Ask the model to skip "thinking" for a quicker reply (fast mode). */
+  noThinking?: boolean;
+}): Promise<string> {
+  if (input.noThinking && !thinkingConfigRejected.has(input.model)) {
+    try {
+      return await generateRequest({ ...input, thinkingOff: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      // Some models only work in thinking mode or do not know the field: remember and retry plainly.
+      if (!(error instanceof GeminiTimeoutError) && /thinking|budget/i.test(message)) {
+        thinkingConfigRejected.add(input.model);
+      } else {
+        throw error;
+      }
+    }
+  }
+  return generateRequest({ ...input, thinkingOff: false });
+}
+
+async function generateRequest(input: {
+  key: string;
+  model: string;
+  system: string;
+  user: string;
+  image?: { mimeType: string; base64: string };
+  timeoutMs?: number;
+  thinkingOff: boolean;
 }): Promise<string> {
   const parts: Array<Record<string, unknown>> = [{ text: input.user }];
   if (input.image) {
@@ -140,18 +177,34 @@ async function generateOnce(input: {
       },
     });
   }
-  const response = await fetch(`${GEMINI_BASE}/models/${encodeURIComponent(input.model)}:generateContent`, {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": input.key,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: input.system }] },
-      contents: [{ role: "user", parts }],
-      generationConfig: { temperature: 0.2 },
-    }),
-  });
+  const controller = input.timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), input.timeoutMs) : null;
+  let response: Response;
+  try {
+    response = await fetch(`${GEMINI_BASE}/models/${encodeURIComponent(input.model)}:generateContent`, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": input.key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: input.system }] },
+        contents: [{ role: "user", parts }],
+        generationConfig: {
+          temperature: 0.2,
+          ...(input.thinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+        },
+      }),
+      signal: controller?.signal,
+    });
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new GeminiTimeoutError(`Gemini ${input.model} timed out after ${Math.round((input.timeoutMs || 0) / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
     throw new Error(payload.error?.message || `Gemini returned ${response.status}`);
@@ -179,6 +232,8 @@ export async function completeGemini(input: {
   model?: string;
   apiKey?: string;
   image?: { mimeType: string; base64: string };
+  /** Tutor chat: skip thinking, cap each model attempt and the whole call so a busy model cannot stall the reply. */
+  fast?: boolean;
 }): Promise<string | null> {
   const current = await getGeminiSettings();
   const key = (input.apiKey || current.apiKey).trim();
@@ -191,7 +246,13 @@ export async function completeGemini(input: {
       : requested;
   const chain = buildRetryChain(start, pool.length ? pool : FALLBACK_MODELS);
   let lastError = "";
+  const deadline = input.fast ? Date.now() + FAST_TOTAL_MS : Infinity;
   for (const model of chain) {
+    const remaining = deadline - Date.now();
+    if (remaining < 2000) {
+      lastError = lastError || "Gemini did not answer in time";
+      break;
+    }
     try {
       const text = await generateOnce({
         key,
@@ -199,6 +260,8 @@ export async function completeGemini(input: {
         system: input.system,
         user: input.user,
         image: input.image,
+        timeoutMs: input.fast ? Math.min(FAST_ATTEMPT_MS, remaining) : undefined,
+        noThinking: input.fast,
       });
       await AppConfig.updateOne(
         { id: "app" },
@@ -208,7 +271,8 @@ export async function completeGemini(input: {
       return text;
     } catch (error) {
       lastError = error instanceof Error ? error.message : "Gemini call failed";
-      if (!isOverloadedError(lastError)) break;
+      // A timed-out model is treated like a busy one: try the next model in the chain.
+      if (!(error instanceof GeminiTimeoutError) && !isOverloadedError(lastError)) break;
     }
   }
   await AppConfig.updateOne(

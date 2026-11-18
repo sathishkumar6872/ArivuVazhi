@@ -617,6 +617,29 @@ export const AppConfig = mongoose.model(
       chatgptLastCheckedAt: { type: Date, default: null },
       chatgptModels: { type: [String], default: [] },
       chatgptEnabledModels: { type: [String], default: [] },
+      /**
+       * Extra ChatGPT sign-ins (test setups). When the main account fails or hits its plan
+       * limit, AI calls fall back to these in order. Each has its own app registration.
+       */
+      chatgptBackupAccounts: {
+        type: [
+          new Schema(
+            {
+              id: { type: String, required: true },
+              clientId: { type: String, default: "" },
+              encryptedTokens: { type: String, default: "" },
+              account: { type: String, default: "" },
+              scopes: { type: [String], default: [] },
+              status: { type: String, enum: ["connected", "error"], default: "connected" },
+              lastError: { type: String, default: "" },
+              connectedAt: { type: Date, default: null },
+            },
+            { _id: false },
+          ),
+        ],
+        default: [],
+        select: false,
+      },
     },
     { timestamps: true },
   ),

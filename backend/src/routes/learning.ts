@@ -34,20 +34,6 @@ import {
 
 export const learningRouter = Router();
 
-/** Per-student daily AI request cap (Asia/Kolkata day), shared by tutor and voice input. */
-async function assertDailyAiLimit(userId: string, feature: string) {
-  const [settings, used] = await Promise.all([
-    AppConfig.findOne({ id: "app" }).select("perUserDailyAiLimit").lean(),
-    AiUsage.countDocuments({ userId, feature: { $in: ["tutor", "transcribe"] }, createdAt: { $gte: startOfIstDay() } }),
-  ]);
-  if (used >= (settings?.perUserDailyAiLimit || 40)) {
-    throw new HttpError(429, `Daily ${feature} limit reached. Try again tomorrow.`, "AI_LIMIT");
-  }
-}
-
-function startOfIstDay() {
-  return new Date(`${dayKey()}T00:00:00+05:30`);
-}
 learningRouter.use(requireAuth);
 
 function studentId(req: { user?: { id: string; role: string } }) {
@@ -825,7 +811,6 @@ learningRouter.post(
     const [storedSettings, conversationFound] = await Promise.all([
       AppConfig.findOne({ id: "app" }).lean(),
       body.conversationId ? Conversation.findOne({ id: body.conversationId, studentId: studentId(req) }) : Promise.resolve(null),
-      assertDailyAiLimit(studentId(req), "AI Tutor"),
       assertAiBudgetAvailable("AI Tutor"),
     ]);
     const settings = storedSettings || {
@@ -833,7 +818,6 @@ learningRouter.post(
       chatgptEnabled: false as boolean | undefined,
       geminiEnabled: false as boolean | undefined,
       activePrompt: "You are ArivuVazhi, a calm government-exam tutor.",
-      perUserDailyAiLimit: 40,
     };
     const replyLanguage = detectStudentLanguage(body.message);
     let conversation = conversationFound;
@@ -909,7 +893,8 @@ learningRouter.post(
       mimeType: z.string().min(3).max(100),
       base64: z.string().min(1).max(800_000),
     }).parse(req.body);
-    await Promise.all([assertDailyAiLimit(studentId(req), "Voice input"), assertAiBudgetAvailable("Voice input")]);
+    studentId(req);
+    await assertAiBudgetAvailable("Voice input");
     const text = await transcribeAudio(body);
     if (!text) throw new HttpError(503, "Voice transcription needs a valid OpenAI API key and a supported audio recording.", "AI_UNAVAILABLE");
     const tokens = Math.ceil(text.length / 4);

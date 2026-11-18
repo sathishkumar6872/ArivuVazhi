@@ -53,6 +53,9 @@ type Settings = {
     lastError: string;
     models: string[];
     lastCheckedAt?: string | null;
+    /** Fallback ChatGPT sign-ins, tried in order when the main account fails or hits its limit. */
+    backups?: Array<{ id: string; account: string; status: string; lastError: string; connectedAt?: string | null }>;
+    maxBackups?: number;
   };
   gemini?: {
     configured: boolean;
@@ -75,7 +78,6 @@ type Settings = {
     todayTokens: number;
     totalRequests: number;
     totalTokens: number;
-    dailyStudentLimit: number;
   };
 };
 
@@ -150,15 +152,49 @@ export default function AiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read callback query once on mount
   }, []);
 
-  async function continueWithChatGpt() {
+  async function continueWithChatGpt(backup = false) {
     setLocalError("");
     setMessage("");
-    setBusy("authorize");
+    setBusy(backup ? "backup-add" : "authorize");
     try {
-      const result = await api<{ url: string }>("/admin/ai/chatgpt/authorize", { method: "POST", body: "{}" });
+      const result = await api<{ url: string }>("/admin/ai/chatgpt/authorize", {
+        method: "POST",
+        body: JSON.stringify(backup ? { backup: true } : {}),
+      });
       window.location.assign(result.url);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : "ChatGPT sign-in start aagala");
+      setBusy("");
+    }
+  }
+
+  async function makePrimary(id: string) {
+    setBusy(`backup-primary-${id}`);
+    setLocalError("");
+    setMessage("");
+    setPlanUsage(null);
+    try {
+      await api(`/admin/ai/chatgpt/backups/${encodeURIComponent(id)}/primary`, { method: "POST", body: "{}" });
+      setMessage("Primary ChatGPT account maaridichu. Pazhaya primary ippo backup-aa irukku.");
+      reload();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Primary maatha mudiyala");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeBackup(id: string) {
+    setBusy(`backup-remove-${id}`);
+    setLocalError("");
+    setMessage("");
+    try {
+      await api(`/admin/ai/chatgpt/backups/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setMessage("Backup ChatGPT account remove aayiduchu.");
+      reload();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Backup remove aagala");
+    } finally {
       setBusy("");
     }
   }
@@ -458,8 +494,7 @@ export default function AiPage() {
             )}
             {data?.localUsage ? (
               <Typography sx={{ mt: 1.5 }} fontSize={13} color="text.secondary">
-                Tutor (ChatGPT): innikku {data.localUsage.todayRequests} requests / {data.localUsage.todayTokens} tokens
-                · Student daily AI limit: {data.localUsage.dailyStudentLimit}.
+                Tutor (ChatGPT): innikku {data.localUsage.todayRequests} requests / {data.localUsage.todayTokens} tokens.
               </Typography>
             ) : null}
           </Box>
@@ -470,7 +505,7 @@ export default function AiPage() {
             <Button
               variant="contained"
               disabled={Boolean(busy)}
-              onClick={continueWithChatGpt}
+              onClick={() => continueWithChatGpt()}
               startIcon={busy === "authorize" ? <CircularProgress size={16} color="inherit" /> : undefined}
             >
               {busy === "authorize" ? "ChatGPT open aaguthu..." : "Continue with ChatGPT"}
@@ -497,6 +532,67 @@ export default function AiPage() {
             </Button>
           )}
         </Stack>
+
+        <Box sx={{ mt: 2.5, pt: 2, borderTop: "1px solid #EAECF0" }}>
+          <Typography fontWeight={800} fontSize={14}>
+            Backup ChatGPT accounts ({chatgpt?.backups?.length || 0}/{chatgpt?.maxBackups ?? 2})
+          </Typography>
+          <Typography color="text.secondary" fontSize={13} sx={{ mb: 1 }}>
+            Primary account fail aanaa illa limit-ku vandhaa, AI automatic-aa indha accounts-a order-la use pannum. Test-ku mattum.
+          </Typography>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 0.75 }}>
+            <Chip size="small" label="Primary" sx={{ fontWeight: 800, bgcolor: "#EEF2FF", color: "#3538CD" }} />
+            <Typography fontSize={14} noWrap sx={{ flex: 1, minWidth: 0 }}>
+              {chatgpt?.signedIn ? chatgpt.account || "ChatGPT account" : "Not connected"}
+            </Typography>
+          </Stack>
+          {(chatgpt?.backups || []).map((backup) => (
+            <Stack key={backup.id} direction="row" alignItems="center" spacing={1} sx={{ py: 0.75 }}>
+              <Chip
+                size="small"
+                label={backup.status === "connected" ? "Connected" : "Error"}
+                sx={{
+                  fontWeight: 800,
+                  bgcolor: backup.status === "connected" ? "#ECFDF3" : "#FEF3F2",
+                  color: backup.status === "connected" ? "#027A48" : "#B42318",
+                }}
+              />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography fontSize={14} noWrap>{backup.account || "ChatGPT account"}</Typography>
+                {backup.lastError ? (
+                  <Typography fontSize={12} color="error" noWrap title={backup.lastError}>{backup.lastError}</Typography>
+                ) : null}
+              </Box>
+              <Button
+                size="small"
+                disabled={Boolean(busy) || backup.status !== "connected"}
+                onClick={() => makePrimary(backup.id)}
+              >
+                {busy === `backup-primary-${backup.id}` ? "Maathuthu..." : "Make primary"}
+              </Button>
+              <Button
+                size="small"
+                color="error"
+                disabled={Boolean(busy)}
+                onClick={() => removeBackup(backup.id)}
+              >
+                {busy === `backup-remove-${backup.id}` ? "Remove aaguthu..." : "Remove"}
+              </Button>
+            </Stack>
+          ))}
+          {(chatgpt?.backups?.length || 0) < (chatgpt?.maxBackups ?? 2) && (
+            <Button
+              variant="outlined"
+              size="small"
+              sx={{ mt: 1 }}
+              disabled={Boolean(busy)}
+              onClick={() => continueWithChatGpt(true)}
+              startIcon={busy === "backup-add" ? <CircularProgress size={16} color="inherit" /> : undefined}
+            >
+              {busy === "backup-add" ? "ChatGPT open aaguthu..." : "Add backup account"}
+            </Button>
+          )}
+        </Box>
       </Card>
 
       <Card sx={{ p: 2.5 }}>
@@ -560,8 +656,7 @@ export default function AiPage() {
 
         {data?.localUsage && geminiEnabled ? (
           <Typography sx={{ mt: 1.5 }} fontSize={13} color="text.secondary">
-            Tutor (Gemini): innikku {data.localUsage.todayRequests} requests / {data.localUsage.todayTokens} tokens
-            · Student daily AI limit: {data.localUsage.dailyStudentLimit}.
+            Tutor (Gemini): innikku {data.localUsage.todayRequests} requests / {data.localUsage.todayTokens} tokens.
           </Typography>
         ) : null}
 
