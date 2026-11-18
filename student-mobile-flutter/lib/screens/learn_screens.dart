@@ -76,7 +76,9 @@ class _ExamsScreenState extends State<ExamsScreen> with SafeState {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final user = widget.user;
-    final mine = (exams ?? []).where((exam) => exam['id'] == user.primaryExamId || user.examIds.contains(str(exam['id']))).toList();
+    final mine = (exams ?? []).where((exam) => exam['id'] == user.primaryExamId || user.examIds.contains(str(exam['id']))).toList()
+      // Current exam first.
+      ..sort((a, b) => (b['id'] == user.primaryExamId ? 1 : 0) - (a['id'] == user.primaryExamId ? 1 : 0));
     final list = tab == 'My Exams' ? mine : (exams ?? []);
     return AppScreen(children: [
       Header(title: context.t('Exams')),
@@ -1564,7 +1566,7 @@ class _MockRunScreenState extends State<MockRunScreen> with SafeState {
                 decoration: BoxDecoration(color: palette.bg, borderRadius: BorderRadius.circular(10)),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   tx('${i + 1}', color: palette.ink, weight: w700),
-                  tx(label, color: palette.muted, size: 11),
+                  tx(label, color: palette.muted, size: 10, lines: 1),
                 ]),
               ),
             );
@@ -1616,14 +1618,15 @@ class _MockRunScreenState extends State<MockRunScreen> with SafeState {
               ? AppButton(label: 'Next', onPress: () => setState(() => index += 1))
               : AppButton(
                   label: 'Submit',
-                  onPress: () => showConfirm(
+                  // Not awaited: the button must not show a spinner while the dialog is just open.
+                  onPress: () => unawaited(showConfirm(
                     context,
                     title: 'Submit this test?',
                     body: 'You can submit once today. Unanswered questions stay blank. The server calculates the score.',
                     confirm: 'Submit',
                     cancel: 'Keep working',
                     onConfirm: submit,
-                  ),
+                  )),
                 ),
         ]),
       ],

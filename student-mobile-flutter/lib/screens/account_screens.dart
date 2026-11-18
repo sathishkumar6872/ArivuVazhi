@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../core/api.dart';
@@ -100,7 +102,7 @@ class ProfileScreen extends StatelessWidget {
       ),
       Tap(
         label: 'Logout',
-        onTap: () => showConfirm(
+        onTap: () => unawaited(showConfirm(
           context,
           title: 'Log out?',
           body: 'This device will forget the session. You can sign in again.',
@@ -108,7 +110,7 @@ class ProfileScreen extends StatelessWidget {
           cancel: 'Stay',
           danger: true,
           onConfirm: logout,
-        ),
+        )),
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(16)),
