@@ -1431,7 +1431,12 @@ class _MockIntroScreenState extends State<MockIntroScreen> with SafeState, _Mock
         ),
         for (final line in asList(mock['instructions']))
           Padding(padding: const EdgeInsets.only(bottom: 8), child: tx(str(line), color: palette.muted, lineHeight: 20)),
-        if (!state.ready) AppBanner(tone: BannerTone.info, message: note.isNotEmpty ? note : state.detail),
+        // A failed set's own reason wins over the older "being prepared" note from the start call.
+        if (!state.ready)
+          AppBanner(
+            tone: mock['todaySet'] == 'failed' ? BannerTone.error : BannerTone.info,
+            message: mock['todaySet'] == 'failed' || note.isEmpty ? state.detail : note,
+          ),
         if (state.ready)
           AppButton(
             label: mock['todayStatus'] == 'in_progress' ? 'Continue test' : 'Start test',

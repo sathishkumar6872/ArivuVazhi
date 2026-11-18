@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../core/api.dart';
@@ -166,7 +167,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> with SafeState {
+class _ChatScreenState extends State<ChatScreen> with SafeState, WidgetsBindingObserver {
   final _scroll = ScrollController();
   final List<_Message> messages = [];
   late String thread = widget.conversationId ?? '';
@@ -178,6 +179,7 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final id = widget.conversationId;
     if (id == null) return;
     api('/tutor/conversations/$id').then((conversation) {
@@ -197,6 +199,7 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
     super.dispose();
   }
@@ -243,13 +246,19 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
 
   double _lastInset = 0;
 
+  /// Keep the latest message visible while the keyboard opens and the list shrinks.
+  /// (Scaffold strips viewInsets from MediaQuery, so read the raw keyboard height from the View.)
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final inset = View.of(context).viewInsets.bottom;
+    if (inset > _lastInset) _scrollToEnd();
+    _lastInset = inset;
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    // Keep the latest message visible when the keyboard opens and the list shrinks.
-    final inset = MediaQuery.of(context).viewInsets.bottom;
-    if (inset > _lastInset) _scrollToEnd();
-    _lastInset = inset;
     return AppScreen(
       padded: false,
       body: Column(children: [
@@ -295,6 +304,23 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
     );
   }
 
+  /// Copies a tutor reply as plain text (markdown symbols removed, links kept as "label (url)").
+  Future<void> _copy(String content) async {
+    final plain = content
+        .replaceAllMapped(RegExp(r'\[([^\]]+)\]\((https?://[^)\s]+)\)'), (m) => '${m[1]} (${m[2]})')
+        .replaceAllMapped(RegExp(r'\*\*([^*]+)\*\*'), (m) => m[1]!)
+        .replaceAllMapped(RegExp(r'\*([^*\n]+)\*'), (m) => m[1]!)
+        .replaceAllMapped(RegExp(r'`([^`\n]+)`'), (m) => m[1]!)
+        .replaceAll(RegExp(r'^#{1,3}\s+', multiLine: true), '')
+        .replaceAll(RegExp(r'^>\s?', multiLine: true), '')
+        .trim();
+    await Clipboard.setData(ClipboardData(text: plain));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 2)));
+  }
+
   Widget _bubble(BuildContext context, Palette palette, int index, _Message message) {
     final user = message.role == 'user';
     final maxWidth = MediaQuery.of(context).size.width * 0.9 - 32;
@@ -336,6 +362,8 @@ class _ChatScreenState extends State<ChatScreen> with SafeState {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconBtn(label: 'Copy', icon: Icons.copy_rounded, onPress: () => _copy(message.content)),
+                    gap(6),
                     IconBtn(
                       label: 'Helpful',
                       icon: rated[index] == 'Helpful' ? Icons.thumb_up : Icons.thumb_up_outlined,

@@ -169,9 +169,32 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
   TabName tab = TabName.home;
   final Map<TabName, List<AppRoute>> stacks = {for (final t in TabName.values) t: [rootOf(t)]};
+
+  /// Hide the tab bar while the keyboard is open. Scaffold strips viewInsets from MediaQuery,
+  /// so this listens for metric changes and reads the raw keyboard height from the View.
+  bool keyboardOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final open = View.of(context).viewInsets.bottom > 0;
+    if (open != keyboardOpen) setState(() => keyboardOpen = open);
+  }
 
   AppRoute get route => stacks[tab]!.last;
 
@@ -290,7 +313,6 @@ class _ShellState extends State<Shell> {
   Widget build(BuildContext context) {
     final current = route;
     final fullScreen = current.name == 'chat' || current.name == 'quiz' || current.name == 'mockRun';
-    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
     return PopScope(
       // The app handles every Android back itself (see _systemBack), so it never closes by accident.
       canPop: false,
