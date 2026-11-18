@@ -240,6 +240,8 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
     // 2. Only what the pool could not cover is generated (and joins the pool for everyone).
     let provider = "";
     let fatal: unknown = null;
+    // Last reason a batch failed, logged with the final shortfall so the cause is visible in server logs.
+    let lastBatchError = "";
 
     for (let round = 0; round < MAX_ROUNDS && !fatal; round += 1) {
       const tasks: Array<{ section: SectionState; topic: (typeof topics)[number]; count: number }> = [];
@@ -283,6 +285,8 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
         } catch (error) {
           // Budget/provider problems stop everything; a single bad batch is refilled next round.
           if (FATAL.has((error as { code?: string }).code || "")) fatal = error;
+          lastBatchError = error instanceof Error ? error.message : String(error);
+          console.warn(`Daily mock batch failed (set ${setId}, round ${round + 1}, ${task.count} questions): ${lastBatchError}`);
         }
       });
       if (!added) break;
@@ -291,6 +295,7 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
 
     const questionIds = sections.flatMap((section) => section.questionIds);
     if (questionIds.length < Math.ceil(target * READY_RATIO)) {
+      console.warn(`Daily mock set ${setId} short: ${questionIds.length}/${target}. Last batch error: ${lastBatchError || "none (model returned too few new questions)"}`);
       throw new HttpError(502, `Only ${questionIds.length} of ${target} mock questions could be generated. It will be retried.`, "AI_SHORT");
     }
     await saving;

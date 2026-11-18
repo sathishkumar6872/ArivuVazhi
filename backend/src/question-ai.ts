@@ -40,10 +40,6 @@ const generatedQuestionSchema = z.object({
   difficulty: z.enum(["easy", "medium", "hard"]).optional(),
 });
 
-const generatedBundleSchema = z.object({
-  questions: z.array(generatedQuestionSchema).min(1).max(25),
-});
-
 export type GeneratedMcq = z.infer<typeof generatedQuestionSchema>;
 
 function extractJson(text: string): unknown {
@@ -181,12 +177,39 @@ JSON shape:
 {"questions":[{"stem":"...","options":[{"key":"A","text":"..."},{"key":"B","text":"..."},{"key":"C","text":"..."},{"key":"D","text":"..."}],"correctKey":"A","explanation":"...","difficulty":"${input.difficulty}"}]}`;
 
   const raw = await withTimeout(completeRaw(system, user, provider), "Question generation");
-  const parsed = generatedBundleSchema.parse(extractJson(raw));
-  const questions = parsed.questions.slice(0, count).map(normalizeOptions);
+  const questions = usableQuestions(extractJson(raw), count);
+  return { questions, provider };
+}
+
+/**
+ * Validate generated questions one by one: a single bad item (too-long explanation,
+ * missing option…) is dropped instead of failing the whole batch.
+ */
+function usableQuestions(payload: unknown, count: number): GeneratedMcq[] {
+  const items = z.object({ questions: z.array(z.unknown()) }).safeParse(payload);
+  if (!items.success) throw new HttpError(502, "AI did not return a questions list. Try again.", "AI_EMPTY");
+  const questions: GeneratedMcq[] = [];
+  let firstProblem = "";
+  for (const item of items.data.questions) {
+    if (questions.length >= count) break;
+    const parsed = generatedQuestionSchema.safeParse(item);
+    if (!parsed.success) {
+      firstProblem ||= parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+      continue;
+    }
+    try {
+      questions.push(normalizeOptions(parsed.data));
+    } catch (error) {
+      firstProblem ||= error instanceof Error ? error.message : "invalid question";
+    }
+  }
+  if (firstProblem) {
+    console.warn(`Question generation: dropped ${items.data.questions.length - questions.length} invalid item(s). First problem: ${firstProblem}`);
+  }
   if (!questions.length) {
     throw new HttpError(502, "AI returned no usable questions. Try again.", "AI_EMPTY");
   }
-  return { questions, provider };
+  return questions;
 }
 
 /**
