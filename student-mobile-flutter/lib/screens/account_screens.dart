@@ -19,8 +19,8 @@ class ProfileScreen extends StatelessWidget {
     final palette = context.palette;
     final quick = [
       ('Analytics', Icons.bar_chart, Accent.orange, 'analytics'),
-      ('Notes', Icons.description, Accent.blue, 'notes'),
-      ('Bookmarks', Icons.bookmark, Accent.red, 'bookmarks'),
+      ('Notes', Icons.description, Accent.green, 'notes'),
+      ('Bookmarks', Icons.bookmark, Accent.orange, 'bookmarks'),
       ('Achievements', Icons.emoji_events, Accent.purple, 'achievements'),
     ];
     final rows = [
@@ -33,10 +33,9 @@ class ProfileScreen extends StatelessWidget {
     final appTamil = user.appLanguage == 'ta';
     final examTamil = user.language == 'ta';
     return AppScreen(children: [
-      Container(
+      HeroCard(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(color: palette.primary, borderRadius: BorderRadius.circular(24)),
         child: Row(children: [
           Container(
             width: 68,
@@ -50,7 +49,7 @@ class ProfileScreen extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               tx('${user.firstName} ${user.lastName}', color: Colors.white, size: 20, weight: w800),
               gap(2),
-              tx(user.email, color: palette.mint, lines: 1),
+              tx(user.email, color: const Color(0xFFA7F3D0), lines: 1),
               gap(6),
               tx(
                 '${appTamil ? context.t('Tamil') : context.t('English')} · Exam ${examTamil ? context.t('Tamil') : context.t('English')}',
@@ -265,7 +264,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SafeState {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: palette.bg, borderRadius: BorderRadius.circular(14), border: Border.all(color: palette.line)),
+      decoration: BoxDecoration(color: palette.inset, borderRadius: BorderRadius.circular(14), border: Border.all(color: palette.line)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
@@ -362,7 +361,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> with SafeState {
               examOpen = false;
             }),
             selectedName: selected == null ? null : str(selected['name']),
-            fieldColor: palette.bg,
+            fieldColor: palette.inset,
             showAuthority: true,
           ),
         ]),
@@ -555,10 +554,10 @@ class _AchievementsScreenState extends State<AchievementsScreen> with SafeState 
       Header(title: context.t('Achievements'), subtitle: 'Personal milestones', onBack: widget.back),
       for (final (title, detail, earned) in achievements)
         AppCard(
-          color: earned ? palette.greenSoft : null,
-          borderColor: earned ? palette.green : null,
+          color: earned ? palette.goldSoft : null,
+          borderColor: earned ? palette.gold : null,
           child: Row(children: [
-            Icon(earned ? Icons.workspace_premium : Icons.workspace_premium_outlined, size: 24, color: earned ? palette.green : palette.muted),
+            Icon(earned ? Icons.workspace_premium : Icons.workspace_premium_outlined, size: 24, color: earned ? palette.gold : palette.muted),
             gap(12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -566,7 +565,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> with SafeState 
                 tx(detail, color: palette.muted),
               ]),
             ),
-            tx(earned ? 'Earned' : 'Locked', color: earned ? palette.green : palette.muted, weight: w700),
+            tx(earned ? 'Earned' : 'Locked', color: earned ? palette.gold : palette.muted, weight: w700),
           ]),
         ),
     ]);
@@ -604,17 +603,6 @@ class _SettingsScreenState extends State<SettingsScreen> with SafeState {
     }
   }
 
-  Widget _setting(BuildContext context, String label, String value, VoidCallback? onPress) {
-    final palette = context.palette;
-    return AppCard(
-      onPress: onPress,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        tx(label, color: palette.muted),
-        gap(4),
-        tx(value, color: palette.ink, weight: w800),
-      ]),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -626,11 +614,32 @@ class _SettingsScreenState extends State<SettingsScreen> with SafeState {
       Header(title: context.t('Settings'), onBack: widget.back),
       if (error.isNotEmpty) AppBanner(message: error),
       if (message.isNotEmpty) AppBanner(tone: BannerTone.success, message: message),
-      _setting(context, 'Theme', '${palette.dark ? 'Dark' : 'Light'} · tap to switch', context.app.toggleTheme),
-      _setting(context, context.t('Notifications'), prefs['notifications'] == true ? 'In-app on' : 'In-app off',
-          () => save({'preferences': {...prefs, 'notifications': prefs['notifications'] != true}})),
-      _setting(context, 'Carry unfinished tasks', prefs['carryForward'] == true ? 'On' : 'Off',
-          () => save({'preferences': {...prefs, 'carryForward': prefs['carryForward'] != true}})),
+      AppCard(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        child: Column(children: [
+          SwitchRow(
+            icon: Icons.dark_mode_outlined,
+            title: 'Dark theme',
+            value: palette.dark,
+            divider: false,
+            onChanged: (_) => context.app.toggleTheme(),
+          ),
+          SwitchRow(
+            icon: Icons.notifications_none,
+            title: context.t('Notifications'),
+            subtitle: 'In-app updates under the bell',
+            value: prefs['notifications'] == true,
+            onChanged: (on) => save({'preferences': {...prefs, 'notifications': on}}),
+          ),
+          SwitchRow(
+            icon: Icons.event_repeat,
+            title: 'Carry unfinished tasks',
+            subtitle: 'Move unfinished plan tasks to today',
+            value: prefs['carryForward'] == true,
+            onChanged: (on) => save({'preferences': {...prefs, 'carryForward': on}}),
+          ),
+        ]),
+      ),
       AppCard(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           tx('Privacy and data', color: palette.ink, weight: w800),
@@ -651,31 +660,22 @@ class _SettingsScreenState extends State<SettingsScreen> with SafeState {
       ),
       Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: tx(context.t('AI memory'), color: palette.ink, weight: w700)),
       AppCard(
-        onPress: () async {
-          final enabled = !user.aiMemoryEnabled;
-          try {
-            widget.onUser(Student.fromJson(await api('/profile', method: 'PATCH', body: {'aiMemoryEnabled': enabled})));
-            await api('/tutor/memory', method: 'PATCH', body: {'enabled': enabled});
-          } catch (err) {
-            safe(() => error = errorText(err));
-          }
-        },
-        child: Row(children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(color: palette.mint, borderRadius: BorderRadius.circular(12)),
-            child: Icon(user.aiMemoryEnabled ? Icons.auto_awesome : Icons.auto_awesome_outlined, size: 18, color: palette.primary),
-          ),
-          gap(12),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              tx('Learning memory', color: palette.muted),
-              gap(2),
-              tx(user.aiMemoryEnabled ? 'On' : 'Off', color: palette.ink, weight: w800),
-            ]),
-          ),
-        ]),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        child: SwitchRow(
+          icon: Icons.auto_awesome_outlined,
+          title: 'Learning memory',
+          subtitle: 'Tutor remembers what you find difficult',
+          value: user.aiMemoryEnabled,
+          divider: false,
+          onChanged: (enabled) async {
+            try {
+              widget.onUser(Student.fromJson(await api('/profile', method: 'PATCH', body: {'aiMemoryEnabled': enabled})));
+              await api('/tutor/memory', method: 'PATCH', body: {'enabled': enabled});
+            } catch (err) {
+              safe(() => error = errorText(err));
+            }
+          },
+        ),
       ),
       for (final item in items.take(4))
         Field(

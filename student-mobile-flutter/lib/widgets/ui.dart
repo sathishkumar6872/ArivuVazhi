@@ -4,6 +4,9 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/api.dart';
 import '../core/app_state.dart';
+import 'glass.dart';
+
+export 'glass.dart';
 
 // ---------------------------------------------------------------- text helper
 
@@ -28,12 +31,20 @@ Text tx(
       color: color,
       fontSize: size,
       fontWeight: weight,
+      // Brand headings in Poppins; Tamil glyphs fall back to the system Tamil font.
+      fontFamily: isHeading(size, weight) ? headingFont : null,
       height: lineHeight == null ? null : lineHeight / size,
       fontStyle: style,
       letterSpacing: letterSpacing,
     ),
   );
 }
+
+const headingFont = 'Poppins';
+
+/// Large bold text (titles, scores) uses the heading font.
+bool isHeading(double size, FontWeight? weight) =>
+    size >= 17 && weight != null && weight.value >= FontWeight.w700.value;
 
 const w600 = FontWeight.w600;
 const w700 = FontWeight.w700;
@@ -52,7 +63,11 @@ class Tap extends StatelessWidget {
     return Semantics(
       button: true,
       label: label,
-      child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: onTap, child: child),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: PressScale(enabled: onTap != null, child: child),
+      ),
     );
   }
 }
@@ -63,25 +78,51 @@ Widget gap(double size) => SizedBox(height: size, width: size);
 // ---------------------------------------------------------------- screen + header
 
 class AppScreen extends StatelessWidget {
-  const AppScreen({super.key, this.children = const [], this.body, this.padded = true, this.controller});
+  const AppScreen({super.key, this.children = const [], this.body, this.padded = true, this.controller, this.footer});
 
   final List<Widget> children;
   final Widget? body;
   final bool padded;
   final ScrollController? controller;
 
+  /// Pinned action bar under the scrolling content (e.g. Previous / Next in a quiz).
+  final Widget? footer;
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    // Room for the floating tab bar / system bar (the shell adds it to MediaQuery padding).
+    final bottomInset = MediaQuery.of(context).padding.bottom;
     final content = body != null
         ? (padded ? Padding(padding: const EdgeInsets.all(16), child: body) : body!)
         : ListView(
             controller: controller,
-            padding: padded ? const EdgeInsets.fromLTRB(16, 16, 16, 28) : EdgeInsets.zero,
+            padding: padded ? EdgeInsets.fromLTRB(16, 16, 16, 28 + (footer == null ? bottomInset : 0)) : EdgeInsets.zero,
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
-            children: children,
+            children: [
+              // Staggered entrance: each block fades up a moment after the one above it.
+              for (var i = 0; i < children.length; i++)
+                FadeSlideIn(
+                  key: ValueKey('fade-$i-${children[i].runtimeType}-${children[i].key}'),
+                  delay: Duration(milliseconds: 35 * (i < 10 ? i : 10)),
+                  child: children[i],
+                ),
+            ],
           );
-    return ColoredBox(color: palette.bg, child: SafeArea(bottom: false, child: content));
+    final withFooter = footer == null
+        ? content
+        : Column(children: [
+            Expanded(child: content),
+            Frosted(
+              decoration: BoxDecoration(
+                color: palette.dark ? const Color(0xB30B1C15) : const Color(0xE6FFFFFF),
+                border: Border(top: BorderSide(color: palette.line)),
+              ),
+              child: Padding(padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + bottomInset), child: footer),
+            ),
+          ]);
+    // Transparent: the app backdrop (gradient + glow) shows through.
+    return SafeArea(bottom: false, child: withFooter);
   }
 }
 
@@ -107,7 +148,16 @@ class Header extends StatelessWidget {
                   ? null
                   : Align(
                       alignment: Alignment.centerLeft,
-                      child: Tap(label: 'Back', onTap: onBack, child: Icon(Icons.chevron_left, size: 30, color: palette.ink)),
+                      child: Tap(
+                        label: 'Back',
+                        onTap: onBack,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: glassBox(palette, radius: 14, shadow: false),
+                          child: Icon(Icons.chevron_left, size: 26, color: palette.ink),
+                        ),
+                      ),
                     ),
             ),
             Expanded(
@@ -135,7 +185,8 @@ class Header extends StatelessWidget {
 
 typedef PressHandler = FutureOr<void> Function();
 
-enum Tone { primary, ghost, danger, outline }
+/// `onHero`: white button for use on the dark-green hero cards.
+enum Tone { primary, ghost, danger, outline, onHero }
 
 class AppButton extends StatefulWidget {
   const AppButton({
@@ -183,20 +234,63 @@ class _AppButtonState extends State<AppButton> {
     final palette = context.palette;
     final busy = widget.loading || _pending;
     final tone = widget.tone;
-    final background = tone == Tone.primary
-        ? palette.green
+    // Hierarchy: primary = solid green (main action); ghost text buttons = quiet outline;
+    // ghost icon buttons keep the soft mint chip so they stay visible on any card.
+    final quietText = tone == Tone.ghost && !widget.iconOnly;
+    final primary = tone == Tone.primary;
+    final color = primary
+        ? palette.greenInk
         : tone == Tone.danger
-            ? palette.dangerSoft
-            : tone == Tone.outline
-                ? palette.surface
-                : palette.mint;
-    final color = tone == Tone.primary ? palette.greenInk : (tone == Tone.danger ? palette.danger : palette.primary);
-    final border = tone == Tone.outline ? palette.green : Colors.transparent;
+            ? palette.danger
+            : tone == Tone.onHero
+                ? const Color(0xFF0B3D2E)
+                : palette.primary;
     final inactive = widget.disabled || busy;
     final spinner = SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: color));
+    // Primary: gradient + soft glow. Quiet text buttons: glass/white card. Icon chips: tinted.
+    final BoxDecoration decoration = primary
+        ? BoxDecoration(
+            borderRadius: BorderRadius.circular(widget.iconOnly ? 13 : 16),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: palette.dark
+                  ? const [Color(0xFF34D399), Color(0xFF16A34A)]
+                  : const [Color(0xFF22C55E), Color(0xFF15803D)],
+            ),
+            boxShadow: inactive
+                ? null
+                : [BoxShadow(color: palette.green.withAlpha(0x59), blurRadius: 18, offset: const Offset(0, 8), spreadRadius: -6)],
+          )
+        : tone == Tone.onHero
+            ? BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 6), spreadRadius: -6)],
+              )
+            : tone == Tone.danger
+            ? BoxDecoration(
+                color: palette.dangerSoft,
+                borderRadius: BorderRadius.circular(widget.iconOnly ? 13 : 16),
+                border: Border.all(color: palette.danger.withAlpha(0x33)),
+              )
+            : tone == Tone.outline
+                ? BoxDecoration(
+                    color: palette.dark ? palette.surface : palette.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: palette.green),
+                  )
+                : quietText
+                    ? glassBox(palette, radius: 16, shadow: false)
+                    : BoxDecoration(
+                        color: palette.greenSoft,
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(color: palette.green.withAlpha(0x26)),
+                      );
 
     if (widget.iconOnly && widget.icon != null) {
-      return Opacity(
+      return AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
         opacity: inactive ? 0.45 : 1,
         child: Tap(
           label: widget.label,
@@ -205,11 +299,7 @@ class _AppButtonState extends State<AppButton> {
             width: 40,
             height: 40,
             alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: border),
-            ),
+            decoration: decoration,
             child: busy ? spinner : Icon(widget.icon, size: 18, color: color),
           ),
         ),
@@ -218,19 +308,16 @@ class _AppButtonState extends State<AppButton> {
     final label = busy ? (widget.label.endsWith('...') ? widget.label : '${widget.label}...') : widget.label;
     return Padding(
       padding: EdgeInsets.only(top: widget.marginTop),
-      child: Opacity(
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
         opacity: inactive ? 0.45 : 1,
         child: Tap(
           label: widget.label,
           onTap: inactive ? null : _handle,
           child: Container(
-            constraints: const BoxConstraints(minHeight: 50),
+            constraints: const BoxConstraints(minHeight: 52),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: border),
-            ),
+            decoration: decoration,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -397,14 +484,11 @@ class _FieldState extends State<Field> {
             padding: const EdgeInsets.only(bottom: 6),
             child: tx(widget.label, color: palette.muted, size: 13, weight: w600),
           ),
-          Container(
-            constraints: const BoxConstraints(minHeight: 50),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            constraints: const BoxConstraints(minHeight: 52),
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: palette.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: focused ? palette.green : palette.line),
-            ),
+            decoration: _inputBox(palette, focused),
             child: Row(
               children: [
                 if (widget.icon != null)
@@ -456,6 +540,16 @@ class _FieldState extends State<Field> {
       ),
     );
   }
+}
+
+/// Input well: glass in dark, white in light; green ring + glow when focused.
+BoxDecoration _inputBox(Palette palette, bool focused, {double radius = 14, Color? color}) {
+  return BoxDecoration(
+    color: color ?? (palette.dark ? palette.inset : palette.surface),
+    borderRadius: BorderRadius.circular(radius),
+    border: Border.all(color: focused ? palette.green : palette.line, width: focused ? 1.4 : 1),
+    boxShadow: focused ? [BoxShadow(color: palette.green.withAlpha(0x2E), blurRadius: 14, spreadRadius: 0)] : null,
+  );
 }
 
 /// Plain bordered input used for search and the chat composer.
@@ -520,15 +614,12 @@ class _PlainInputState extends State<PlainInput> {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
       height: widget.height,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: widget.background ?? palette.surface,
-        borderRadius: BorderRadius.circular(widget.radius),
-        border: Border.all(color: _focus.hasFocus ? palette.green : palette.line),
-      ),
+      decoration: _inputBox(palette, _focus.hasFocus, radius: widget.radius, color: widget.background),
       child: TextField(
         controller: _controller,
         focusNode: _focus,
@@ -578,11 +669,7 @@ class AppCard extends StatelessWidget {
       width: double.infinity,
       margin: EdgeInsets.only(bottom: marginBottom, top: marginTop),
       padding: padding,
-      decoration: BoxDecoration(
-        color: color ?? palette.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderColor ?? palette.line),
-      ),
+      decoration: glassBox(palette, color: color, border: borderColor),
       child: child,
     );
     if (onPress == null) return box;
@@ -604,12 +691,20 @@ class ProgressBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(99),
         child: Container(
           height: 6,
-          color: palette.line,
+          color: palette.dark ? palette.inset : palette.line,
           alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-            widthFactor: fraction.toDouble(),
-            child: Container(
-              decoration: BoxDecoration(color: palette.green, borderRadius: BorderRadius.circular(99)),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: fraction.toDouble()),
+            duration: const Duration(milliseconds: 700),
+            curve: Curves.easeOutCubic,
+            builder: (context, v, _) => FractionallySizedBox(
+              widthFactor: v,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(99),
+                  gradient: LinearGradient(colors: [palette.accent, palette.green]),
+                ),
+              ),
             ),
           ),
         ),
@@ -627,31 +722,59 @@ class Segment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final index = options.indexOf(value).clamp(0, options.length - 1);
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(14)),
-      child: Row(
-        children: [
-          for (final option in options)
-            Expanded(
-              child: Tap(
-                label: option,
-                onTap: () => onChange(option),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: option == value ? palette.primary : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: tx(option,
-                      color: option == value ? palette.greenInk : palette.muted, weight: w700, size: 13, lines: 1),
+      decoration: palette.dark
+          ? glassBox(palette, radius: 16, shadow: false)
+          : BoxDecoration(color: const Color(0xFFEDF1EE), borderRadius: BorderRadius.circular(16)),
+      child: LayoutBuilder(builder: (context, box) {
+        final width = box.maxWidth / options.length;
+        return Stack(children: [
+          // The selected pill slides between options.
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            left: width * index,
+            top: 0,
+            bottom: 0,
+            width: width,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                gradient: LinearGradient(
+                  colors: palette.dark
+                      ? const [Color(0xFF34D399), Color(0xFF16A34A)]
+                      : const [Color(0xFF0B3D2E), Color(0xFF14532D)],
                 ),
+                boxShadow: [BoxShadow(color: palette.shadow, blurRadius: 10, offset: const Offset(0, 4))],
               ),
             ),
-        ],
-      ),
+          ),
+          Row(children: [
+            for (final option in options)
+              Expanded(
+                child: Tap(
+                  label: option,
+                  onTap: () => onChange(option),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    child: AnimatedDefaultTextStyle(
+                      duration: const Duration(milliseconds: 200),
+                      style: TextStyle(
+                        color: option == value ? (palette.dark ? palette.greenInk : Colors.white) : palette.muted,
+                        fontWeight: w700,
+                        fontSize: 13,
+                      ),
+                      child: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+                    ),
+                  ),
+                ),
+              ),
+          ]),
+        ]);
+      }),
     );
   }
 }
@@ -667,28 +790,78 @@ class ScoreRing extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Center(
-        child: Container(
-          width: 148,
-          height: 148,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: palette.surface,
-            border: Border.all(color: palette.accent, width: 12),
-          ),
-          alignment: Alignment.center,
+        child: RingGauge(
+          value: value,
+          size: 148,
+          stroke: 12,
+          color: palette.accent,
+          track: palette.line,
+          fill: palette.dark ? palette.inset : palette.surface,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              tx('$value%', color: palette.primary, size: 34, weight: w800),
+              CountUp(
+                value: value,
+                suffix: '%',
+                style: TextStyle(color: palette.primary, fontSize: 34, fontWeight: w800, fontFamily: headingFont),
+              ),
               gap(2),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: tx(caption, color: palette.muted, align: TextAlign.center, lines: 2),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Circular progress ring filled to `value` percent, with content in the middle.
+class RingGauge extends StatelessWidget {
+  const RingGauge({
+    super.key,
+    required this.value,
+    required this.size,
+    required this.stroke,
+    required this.color,
+    required this.track,
+    required this.child,
+    this.fill,
+  });
+  final num value;
+  final double size;
+  final double stroke;
+  final Color color;
+  final Color track;
+  final Color? fill;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final fraction = (value.clamp(0, 100) / 100).toDouble();
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(alignment: Alignment.center, children: [
+        if (fill != null) Container(decoration: BoxDecoration(shape: BoxShape.circle, color: fill)),
+        SizedBox.expand(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: fraction),
+            duration: const Duration(milliseconds: 1000),
+            curve: Curves.easeOutCubic,
+            builder: (context, v, _) => CircularProgressIndicator(
+              value: v,
+              strokeWidth: stroke,
+              color: color,
+              backgroundColor: track,
+              strokeCap: StrokeCap.round,
+            ),
+          ),
+        ),
+        child,
+      ]),
     );
   }
 }
@@ -868,16 +1041,22 @@ class IconTile extends StatelessWidget {
       onTap: onPress,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-        decoration: BoxDecoration(
-          color: palette.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: palette.line),
-          boxShadow: const [BoxShadow(color: Color(0x0F0B3D2E), blurRadius: 8, offset: Offset(0, 3))],
-        ),
+        decoration: glassBox(palette, radius: 20),
         child: Column(
           children: [
-            Icon(icon, size: 28, color: accents[accent]),
-            gap(6),
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: accents[accent]!.withAlpha(palette.dark ? 0x33 : 0x1F),
+                boxShadow: palette.dark
+                    ? [BoxShadow(color: accents[accent]!.withAlpha(0x40), blurRadius: 16, spreadRadius: -4)]
+                    : null,
+              ),
+              child: Icon(icon, size: 24, color: accents[accent]),
+            ),
+            gap(8),
             tx(label, color: palette.ink, size: 12, weight: w700, align: TextAlign.center, lines: 1),
           ],
         ),
@@ -898,11 +1077,26 @@ class Pill extends StatelessWidget {
     final palette = context.palette;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      // Neutral (soft) pills are grey so only "good" status reads as green.
       decoration: BoxDecoration(
-        color: tone == PillTone.warn ? palette.dangerSoft : palette.greenSoft,
+        color: switch (tone) {
+          PillTone.warn => palette.dangerSoft,
+          PillTone.good => palette.greenSoft,
+          PillTone.soft => palette.inset,
+        },
         borderRadius: BorderRadius.circular(99),
+        border: tone == PillTone.soft ? Border.all(color: palette.line) : null,
       ),
-      child: tx(label, color: tone == PillTone.warn ? palette.danger : palette.green, size: 12, weight: w700),
+      child: tx(
+        label,
+        color: switch (tone) {
+          PillTone.warn => palette.danger,
+          PillTone.good => palette.green,
+          PillTone.soft => palette.muted,
+        },
+        size: 12,
+        weight: w700,
+      ),
     );
   }
 }
@@ -921,11 +1115,24 @@ class AppBanner extends StatelessWidget {
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
+      // Error = red, info = blue, success = green: each message type has its own colour.
       decoration: BoxDecoration(
-        color: tone == BannerTone.error ? palette.dangerSoft : palette.greenSoft,
+        color: switch (tone) {
+          BannerTone.error => palette.dangerSoft,
+          BannerTone.info => palette.infoSoft,
+          BannerTone.success => palette.greenSoft,
+        },
         borderRadius: BorderRadius.circular(12),
       ),
-      child: tx(message, color: tone == BannerTone.error ? palette.danger : palette.green, lineHeight: 20),
+      child: tx(
+        message,
+        color: switch (tone) {
+          BannerTone.error => palette.danger,
+          BannerTone.info => palette.info,
+          BannerTone.success => palette.green,
+        },
+        lineHeight: 20,
+      ),
     );
   }
 }
@@ -1084,10 +1291,15 @@ class Empty extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 28),
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
       child: Column(children: [
-        Icon(Icons.eco_outlined, size: 28, color: palette.green),
-        gap(8),
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(color: palette.greenSoft, shape: BoxShape.circle),
+          child: Icon(Icons.eco_outlined, size: 32, color: palette.green),
+        ),
+        gap(14),
         tx(title, color: palette.ink, size: 18, weight: w700, align: TextAlign.center),
         gap(8),
         tx(body, color: palette.muted, align: TextAlign.center, lineHeight: 20),
@@ -1118,27 +1330,44 @@ class Choice extends StatelessWidget {
     final background = switch (state) {
       ChoiceState.correct => palette.greenSoft,
       ChoiceState.wrong => palette.dangerSoft,
-      _ => palette.surface,
+      ChoiceState.selected => palette.greenSoft,
+      ChoiceState.idle => null,
+    };
+    final letterColor = switch (state) {
+      ChoiceState.correct => palette.good,
+      ChoiceState.wrong => palette.danger,
+      ChoiceState.selected => palette.green,
+      ChoiceState.idle => palette.inset,
     };
     final idle = state == ChoiceState.idle;
-    return Tap(
-      label: '$letter. $text',
-      onTap: disabled ? null : onPress,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(14), border: Border.all(color: border)),
-        child: Row(children: [
-          Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: idle ? palette.bg : palette.green),
-            child: tx(letter, weight: w700, color: idle ? palette.ink : palette.greenInk),
-          ),
-          gap(10),
-          Expanded(child: tx(text, color: palette.ink, lineHeight: 20)),
-        ]),
+    final box = glassBox(palette, radius: 16, color: background, border: border, shadow: idle);
+    return AnswerFeedback(
+      trigger: state.name,
+      child: Tap(
+        label: '$letter. $text',
+        onTap: disabled ? null : onPress,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(13),
+          decoration: box.copyWith(border: Border.all(color: border, width: idle ? 1 : 1.6)),
+          child: Row(children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: letterColor),
+              child: state == ChoiceState.correct
+                  ? const Icon(Icons.check, size: 17, color: Colors.white)
+                  : state == ChoiceState.wrong
+                      ? const Icon(Icons.close, size: 17, color: Colors.white)
+                      : tx(letter, weight: w700, color: idle ? palette.ink : Colors.white),
+            ),
+            gap(12),
+            Expanded(child: tx(text, color: palette.ink, lineHeight: 21, size: 14.5)),
+          ]),
+        ),
       ),
     );
   }
@@ -1158,15 +1387,22 @@ Future<void> showConfirm(
 }) {
   return showDialog<void>(
     context: context,
-    barrierColor: const Color(0x73121614),
+    barrierColor: const Color(0x8C040B08),
     builder: (dialogContext) {
       final palette = context.palette;
       return Dialog(
-        backgroundColor: palette.surface,
-        insetPadding: const EdgeInsets.all(20),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: Padding(
-          padding: const EdgeInsets.all(18),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.all(22),
+        child: Frosted(
+          radius: 26,
+          decoration: BoxDecoration(
+            color: palette.elevated,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: palette.line),
+          ),
+          child: Padding(
+          padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1187,6 +1423,7 @@ Future<void> showConfirm(
             ],
           ),
         ),
+        ),
       );
     },
   );
@@ -1198,12 +1435,18 @@ Future<void> showSheet(BuildContext context, {required String title, required Wi
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: palette.surface,
-    barrierColor: const Color(0x73121614),
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+    backgroundColor: Colors.transparent,
+    barrierColor: const Color(0x8C040B08),
     builder: (sheetContext) => ConstrainedBox(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.8),
-      child: SingleChildScrollView(
+      child: Frosted(
+        radius: 0,
+        decoration: BoxDecoration(
+          color: palette.elevated,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          border: Border(top: BorderSide(color: palette.line)),
+        ),
+        child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1212,7 +1455,7 @@ Future<void> showSheet(BuildContext context, {required String title, required Wi
               child: Container(
                 width: 40,
                 height: 4,
-                decoration: BoxDecoration(color: const Color(0xFFD5D0C8), borderRadius: BorderRadius.circular(99)),
+                decoration: BoxDecoration(color: palette.line, borderRadius: BorderRadius.circular(99)),
               ),
             ),
             gap(12),
@@ -1222,11 +1465,15 @@ Future<void> showSheet(BuildContext context, {required String title, required Wi
           ],
         ),
       ),
+      ),
     ),
   );
 }
 
 // ---------------------------------------------------------------- tab bar + brand
+
+/// Height the floating tab bar takes above the system inset (content scrolls under it).
+const tabBarSpace = 86.0;
 
 class AppTabBar extends StatelessWidget {
   const AppTabBar({super.key, required this.tab, required this.onChange});
@@ -1238,62 +1485,177 @@ class AppTabBar extends StatelessWidget {
     final palette = context.palette;
     // Design order: the AI Tutor is the raised round button in the middle.
     const items = [
-      ('home', Icons.home, Icons.home_outlined, 'Home'),
-      ('exams', Icons.menu_book, Icons.menu_book_outlined, 'Exams'),
+      ('home', Icons.home_rounded, Icons.home_outlined, 'Home'),
+      ('exams', Icons.menu_book_rounded, Icons.menu_book_outlined, 'Exams'),
       ('tutor', Icons.auto_awesome, Icons.auto_awesome, 'AI Tutor'),
-      ('practice', Icons.assignment, Icons.assignment_outlined, 'Practice'),
-      ('profile', Icons.person, Icons.person_outline, 'Profile'),
+      ('practice', Icons.assignment_rounded, Icons.assignment_outlined, 'Practice'),
+      ('profile', Icons.person_rounded, Icons.person_outline_rounded, 'Profile'),
     ];
     final bottom = MediaQuery.of(context).padding.bottom;
-    return Container(
-      padding: EdgeInsets.only(top: 6, bottom: 10 + bottom),
-      decoration: BoxDecoration(color: palette.surface, border: Border(top: BorderSide(color: palette.line))),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          for (final (id, activeIcon, icon, label) in items)
-            Expanded(
-              child: Tap(
-                label: label,
-                onTap: () => onChange(id),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (id == 'tutor')
-                      SizedBox(
-                        height: 30,
-                        child: OverflowBox(
-                          minHeight: 56,
-                          maxHeight: 56,
-                          alignment: Alignment.bottomCenter,
-                          child: Container(
-                            width: 56,
-                            height: 56,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: palette.green,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: palette.surface, width: 4),
-                              boxShadow: const [BoxShadow(color: Color(0x5916A34A), blurRadius: 10, offset: Offset(0, 4))],
-                            ),
-                            child: tx('AI', color: Colors.white, size: 17, weight: w900),
+    return Padding(
+      padding: EdgeInsets.fromLTRB(14, 0, 14, 10 + bottom),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [BoxShadow(color: palette.shadow, blurRadius: 30, offset: const Offset(0, 12), spreadRadius: -6)],
+        ),
+        child: Stack(clipBehavior: Clip.none, children: [
+          Frosted(
+            radius: 28,
+            decoration: BoxDecoration(
+              color: palette.dark ? const Color(0xB30B1C15) : const Color(0xEBFFFFFF),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: palette.dark ? const Color(0x2EFFFFFF) : palette.line),
+            ),
+            child: SizedBox(
+              height: 66,
+              child: Row(children: [
+                for (final (id, activeIcon, icon, label) in items)
+                  Expanded(
+                    child: id == 'tutor'
+                        ? Tap(
+                            label: label,
+                            onTap: () => onChange(id),
+                            child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+                              tx(context.t(label), size: 10, weight: w700, color: tab == id ? palette.green : palette.muted, lines: 1),
+                              gap(9),
+                            ]),
+                          )
+                        : _TabItem(
+                            label: context.t(label),
+                            icon: tab == id ? activeIcon : icon,
+                            active: tab == id,
+                            onTap: () => onChange(id),
                           ),
-                        ),
-                      )
-                    else
-                      Icon(tab == id ? activeIcon : icon, size: 22, color: tab == id ? palette.green : palette.muted),
-                    gap(2),
-                    tx(context.t(label),
-                        size: 10,
-                        weight: tab == id && id != 'tutor' ? w800 : w700,
-                        color: tab == id ? palette.green : palette.muted,
-                        lines: 1),
-                  ],
-                ),
+                  ),
+              ]),
+            ),
+          ),
+          // Raised AI button floats above the bar.
+          Positioned(
+            top: -22,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Tap(
+                label: 'AI Tutor',
+                onTap: () => onChange('tutor'),
+                child: const _AiTabButton(),
               ),
             ),
-        ],
+          ),
+        ]),
       ),
+    );
+  }
+}
+
+/// Raised AI Tutor button with a light "elevate" loop: floats up a few pixels and its
+/// glow breathes, once every 3 seconds. Stays still when the system asks to reduce motion.
+class _AiTabButton extends StatefulWidget {
+  const _AiTabButton();
+
+  @override
+  State<_AiTabButton> createState() => _AiTabButtonState();
+}
+
+class _AiTabButtonState extends State<_AiTabButton> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+  late final Animation<double> _lift = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    if (reduceMotion) {
+      _controller.stop();
+      _controller.value = 0;
+    } else if (!_controller.isAnimating) {
+      _controller.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AnimatedBuilder(
+      animation: _lift,
+      builder: (context, child) {
+        final t = _lift.value;
+        return Transform.translate(
+          offset: Offset(0, -3 * t),
+          child: Container(
+            width: 58,
+            height: 58,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
+              ),
+              border: Border.all(color: palette.dark ? const Color(0x4DFFFFFF) : Colors.white, width: 3),
+              boxShadow: [
+                // Glow grows and softens as the button rises.
+                BoxShadow(
+                  color: palette.green.withAlpha((0x59 + 0x33 * t).round()),
+                  blurRadius: 16 + 10 * t,
+                  offset: Offset(0, 8 + 3 * t),
+                  spreadRadius: -4,
+                ),
+              ],
+            ),
+            child: child,
+          ),
+        );
+      },
+      child: tx('AI', color: Colors.white, size: 17, weight: w900),
+    );
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  const _TabItem({required this.label, required this.icon, required this.active, required this.onTap});
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final color = active ? palette.green : palette.muted;
+    return Tap(
+      label: label,
+      onTap: onTap,
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        // Active tab gets a soft pill behind its icon that grows in.
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          width: active ? 46 : 30,
+          height: 28,
+          decoration: BoxDecoration(
+            color: active ? palette.greenSoft : Colors.transparent,
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 240),
+            scale: active ? 1.08 : 1,
+            child: Icon(icon, size: 21, color: color),
+          ),
+        ),
+        gap(3),
+        tx(label, size: 10, weight: active ? w800 : w600, color: color, lines: 1),
+      ]),
     );
   }
 }
@@ -1376,6 +1738,61 @@ class Dots extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Setting row with an icon, title, optional hint and a switch.
+class SwitchRow extends StatelessWidget {
+  const SwitchRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+    this.subtitle,
+    this.divider = true,
+  });
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final bool divider;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(border: divider ? Border(top: BorderSide(color: palette.line)) : null),
+      child: Row(children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(10)),
+          child: Icon(icon, size: 18, color: palette.green),
+        ),
+        gap(12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            tx(title, color: palette.ink, weight: w700),
+            if (subtitle != null) ...[gap(2), tx(subtitle!, color: palette.muted, size: 12)],
+          ]),
+        ),
+        Semantics(
+          label: title,
+          toggled: value,
+          child: Switch(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: Colors.white,
+            activeTrackColor: palette.green,
+            inactiveThumbColor: palette.surface,
+            inactiveTrackColor: palette.line,
+          ),
+        ),
+      ]),
     );
   }
 }

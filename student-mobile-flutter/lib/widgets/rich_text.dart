@@ -7,6 +7,28 @@ import 'ui.dart';
 
 enum RichTone { ink, onGreen }
 
+const _latexSymbols = {
+  'times': '×',
+  'div': '÷',
+  'cdot': '·',
+  'le': '≤',
+  'leq': '≤',
+  'ge': '≥',
+  'geq': '≥',
+  'ne': '≠',
+  'neq': '≠',
+};
+
+/// AI replies sometimes use LaTeX for maths (`\(25\%\)`, `\[x = y\]`, `\times`).
+/// Show it as plain readable text instead of raw backslashes.
+String stripLatex(String text) => text
+    .replaceAll(RegExp(r'\\[()\[\]]'), '')
+    // Whole command names only, so `\left` is not read as `\le`.
+    .replaceAllMapped(RegExp(r'\\(times|div|cdot|leq?|geq?|neq?)(?![a-zA-Z])'), (m) => _latexSymbols[m[1]]!)
+    .replaceAllMapped(RegExp(r'\\frac\{([^{}]*)\}\{([^{}]*)\}'), (m) => '${m[1]}/${m[2]}')
+    .replaceAllMapped(RegExp(r'\\text\{([^{}]*)\}'), (m) => m[1]!)
+    .replaceAllMapped(RegExp(r'\\([%$&#_{}])'), (m) => m[1]!);
+
 String _cleanHref(String href) {
   final uri = Uri.tryParse(href);
   if (uri == null) return href;
@@ -85,7 +107,7 @@ class RichMarkdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final accent = tone == RichTone.onGreen ? palette.mint : palette.green;
-    final lines = content.replaceAll('\r\n', '\n').split('\n');
+    final lines = stripLatex(content.replaceAll('\r\n', '\n')).split('\n');
     final blocks = <Widget>[];
     for (final raw in lines) {
       final trimmed = raw.trim();

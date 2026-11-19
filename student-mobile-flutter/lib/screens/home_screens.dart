@@ -133,28 +133,32 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
       if (error.isNotEmpty) AppBanner(message: error),
       if (!ready && error.isEmpty) const Loading(variant: LoadingVariant.home),
       if (ready) ...[
-        AppCard(
-          color: palette.primary,
-          borderColor: palette.primary,
-          marginTop: 8,
+        HeroCard(
+          margin: const EdgeInsets.only(top: 8, bottom: 10),
           child: Row(children: [
-            Container(
-              width: 92,
-              height: 92,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0x14FFFFFF),
-                border: Border.all(color: palette.accent, width: 8),
+            RingGauge(
+              value: numOf(accuracy),
+              size: 92,
+              stroke: 8,
+              color: palette.accent,
+              track: const Color(0x26FFFFFF),
+              fill: const Color(0x14FFFFFF),
+              child: CountUp(
+                value: numOf(accuracy),
+                suffix: '%',
+                style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: w800, fontFamily: headingFont),
               ),
-              child: tx('$accuracy%', color: Colors.white, size: 24, weight: w800),
             ),
             gap(16),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                tx('PRACTICE ACCURACY', color: palette.mint, weight: w700, size: 12),
+                tx('PRACTICE ACCURACY', color: const Color(0xFFA7F3D0), weight: w700, size: 12),
                 gap(4),
-                tx('$streak day study streak', color: Colors.white, size: 18, weight: w800),
+                Row(children: [
+                  const Icon(Icons.local_fire_department_rounded, size: 22, color: Color(0xFFFBBF24)),
+                  gap(4),
+                  Flexible(child: tx('$streak day study streak', color: Colors.white, size: 18, weight: w800)),
+                ]),
                 gap(4),
                 tx('$done of $planned planned minutes done today', color: const Color(0xFFD1FAE5)),
               ]),
@@ -204,7 +208,7 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
         ),
         GridRows(columns: 3, spacing: 8, children: [
           IconTile(icon: Icons.assignment, accent: Accent.green, label: 'Practice', onPress: () => go(AppRoute('practice'))),
-          IconTile(icon: Icons.timer, accent: Accent.olive, label: 'Mock Tests', onPress: () => go(AppRoute('mocks'))),
+          IconTile(icon: Icons.timer, accent: Accent.orange, label: 'Mock Tests', onPress: () => go(AppRoute('mocks'))),
           IconTile(icon: Icons.auto_awesome, accent: Accent.purple, label: 'AI Tutor', onPress: () => go(AppRoute('tutor'))),
           IconTile(icon: Icons.menu_book, accent: Accent.green, label: 'Syllabus', onPress: () => go(AppRoute('exams'))),
           IconTile(icon: Icons.calendar_month, accent: Accent.green, label: 'Study Plan', onPress: () => go(AppRoute('planner'))),
@@ -361,7 +365,7 @@ class _PlannerScreenState extends State<PlannerScreen> with SafeState {
                       child: Container(
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: date == day ? palette.green : (date == today ? palette.greenSoft : palette.bg),
+                          color: date == day ? palette.green : (date == today ? palette.greenSoft : palette.inset),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: tx('${int.parse(date.substring(8))}',

@@ -7,6 +7,13 @@ import '../core/nav.dart';
 import '../widgets/rich_text.dart';
 import '../widgets/ui.dart';
 
+/// Conversation preview without markdown symbols (**bold**, # headings, `code`, links).
+String _plainPreview(String text) => stripLatex(text)
+    .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]*\)'), (m) => m[1]!)
+    .replaceAll(RegExp(r'[*_`#>]+'), '')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
 const _starters = [
   ('Explain', Icons.menu_book, Accent.green, 'Explain this topic'),
   ('Practice', Icons.help, Accent.orange, 'Give one practice question'),
@@ -51,10 +58,10 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
     return AppScreen(children: [
       Header(title: context.t('AI Tutor')),
       if (error.isNotEmpty) AppBanner(message: error),
-      Container(
+      HeroCard(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: palette.primary, borderRadius: BorderRadius.circular(22)),
+        radius: 22,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Container(
@@ -68,12 +75,12 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 tx('ArivuVazhi AI Tutor', color: Colors.white, size: 17, weight: w800),
                 gap(4),
-                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: palette.mint, lineHeight: 18, size: 13),
+                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: const Color(0xFFA7F3D0), lineHeight: 18, size: 13),
               ]),
             ),
           ]),
           gap(4),
-          AppButton(label: 'Start chat', icon: Icons.arrow_forward, onPress: () => go(AppRoute('chat'))),
+          AppButton(label: 'Start chat', icon: Icons.arrow_forward, tone: Tone.onHero, onPress: () => go(AppRoute('chat'))),
         ]),
       ),
       Padding(padding: const EdgeInsets.only(bottom: 10), child: tx('Quick prompts', color: palette.primary, weight: w800)),
@@ -138,7 +145,7 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 tx(str(item['title']), color: palette.ink, weight: w700, lines: 1),
-                tx(str(item['preview']), color: palette.muted, lines: 2),
+                tx(_plainPreview(str(item['preview'])), color: palette.muted, lines: 2),
               ]),
             ),
             Icon(Icons.chevron_right, size: 18, color: palette.muted),
@@ -146,6 +153,69 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
         ),
       if (items != null && items!.isEmpty) const Empty(title: 'No conversations yet', body: 'Start a chat with one doubt.'),
     ]);
+  }
+}
+
+/// "Tutor is typing" bubble with three pulsing dots, shown while a reply is on its way.
+class _TypingBubble extends StatefulWidget {
+  const _TypingBubble();
+
+  @override
+  State<_TypingBubble> createState() => _TypingBubbleState();
+}
+
+class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Semantics(
+        label: 'Tutor is typing',
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            border: Border.all(color: palette.line),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(18),
+              topRight: Radius.circular(18),
+              bottomRight: Radius.circular(16),
+              bottomLeft: Radius.circular(6),
+            ),
+          ),
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) => Row(mainAxisSize: MainAxisSize.min, children: [
+              for (var i = 0; i < 3; i++) ...[
+                if (i > 0) gap(5),
+                Opacity(
+                  // Each dot peaks a third of a cycle after the previous one.
+                  opacity: 0.3 + 0.7 * (1 - ((_controller.value * 3 - i) % 3 - 0.5).abs().clamp(0, 1)),
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(color: palette.green, shape: BoxShape.circle),
+                  ),
+                ),
+              ],
+              gap(10),
+              tx('Tutor is typing…', color: palette.muted, size: 13),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -269,6 +339,7 @@ class _ChatScreenState extends State<ChatScreen> with SafeState, WidgetsBindingO
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             children: [
               for (var i = 0; i < messages.length; i++) _bubble(context, palette, i, messages[i]),
+              if (sending) const _TypingBubble(),
               if (messages.isEmpty)
                 const Empty(
                   title: 'Ask one doubt',
@@ -292,7 +363,7 @@ class _ChatScreenState extends State<ChatScreen> with SafeState, WidgetsBindingO
                 onFocus: _scrollToEnd,
                 height: 40,
                 radius: 12,
-                background: palette.bg,
+                background: palette.inset,
                 sendAction: true,
               ),
             ),

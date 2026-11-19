@@ -388,8 +388,24 @@ class _PyqPaperScreenState extends State<PyqPaperScreen> with SafeState {
     final answeredCount = answers.length;
     final total = numOf(result?['total']);
     final percent = total > 0 ? (numOf(result?['correct']) / total * 100).round() : 0;
+    final answering = paper != null && questions.isNotEmpty && result == null && question != null;
 
-    return AppScreen(children: [
+    return AppScreen(
+        footer: !answering
+            ? null
+            : Pair([
+                AppButton(
+                    label: 'Previous', tone: Tone.ghost, marginTop: 0, disabled: index == 0, onPress: () => setState(() => index -= 1)),
+                index + 1 < questions.length
+                    ? AppButton(label: 'Next', marginTop: 0, disabled: selected == null, onPress: () => setState(() => index += 1))
+                    : AppButton(
+                        label: busy ? 'Submitting…' : 'Submit paper',
+                        marginTop: 0,
+                        disabled: answeredCount < questions.length || busy,
+                        onPress: submitPaper,
+                      ),
+              ]),
+        children: [
       Header(
         title: str(paper?['title']).isNotEmpty ? str(paper?['title']) : 'Paper',
         subtitle: paper != null ? '${paper!['year']} · ${questions.length} questions' : null,
@@ -415,16 +431,6 @@ class _PyqPaperScreenState extends State<PyqPaperScreen> with SafeState {
             state: selected == str(option['key']) ? ChoiceState.selected : ChoiceState.idle,
             onPress: () => setState(() => answers[str(question['id'])] = str(option['key'])),
           ),
-        Pair([
-          AppButton(label: 'Previous', tone: Tone.ghost, disabled: index == 0, onPress: () => setState(() => index -= 1)),
-          index + 1 < questions.length
-              ? AppButton(label: 'Next', disabled: selected == null, onPress: () => setState(() => index += 1))
-              : AppButton(
-                  label: busy ? 'Submitting…' : 'Submit paper',
-                  disabled: answeredCount < questions.length || busy,
-                  onPress: submitPaper,
-                ),
-        ]),
         if (answeredCount < questions.length && index + 1 >= questions.length)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -736,13 +742,18 @@ class _TopicsScreenState extends State<TopicsScreen> with SafeState {
       if (error.isNotEmpty) AppBanner(message: error),
       if (exam == null && error.isEmpty) const Loading(),
       if (exam != null && topicRows.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: tx(
-            'Each topic opens level by level: 80% in Easy unlocks Medium, 70% in Medium unlocks Hard, 60% in Hard masters it (10+ questions each).',
-            color: palette.muted,
-            lineHeight: 18,
-          ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            Icon(Icons.lock_open, size: 16, color: palette.green),
+            gap(8),
+            Expanded(
+              child: tx('Easy 80% → Medium · Medium 70% → Hard · Hard 60% = mastered (10+ Q each)',
+                  color: palette.primary, size: 12, weight: w600),
+            ),
+          ]),
         ),
       for (final topic in topicRows)
         _TopicLevelCard(
@@ -950,7 +961,19 @@ class _QuizScreenState extends State<QuizScreen> with SafeState {
     final locked = RegExp('unlock', caseSensitive: false).hasMatch(error);
     final clock = '${(elapsed ~/ 60).toString().padLeft(2, '0')}:${(elapsed % 60).toString().padLeft(2, '0')}';
 
-    return AppScreen(children: [
+    return AppScreen(
+        footer: question == null
+            ? null
+            : Pair([
+                AppButton(
+                    label: 'Previous', tone: Tone.ghost, marginTop: 0, disabled: index == 0, onPress: () => setState(() => index -= 1)),
+                AppButton(
+                    label: index + 1 >= questions.length ? 'See result' : 'Next',
+                    marginTop: 0,
+                    disabled: feedback == null,
+                    onPress: next),
+              ]),
+        children: [
       Header(title: route.param('title'), subtitle: subtitle, onBack: widget.back),
       if (question == null && error.isEmpty) const Loading(variant: LoadingVariant.quiz, label: 'Preparing your questions…'),
       if (error.isNotEmpty && question == null) ...[
@@ -1009,10 +1032,6 @@ class _QuizScreenState extends State<QuizScreen> with SafeState {
               tx(str(feedback['explanation']), color: palette.ink, lineHeight: 20),
             ]),
           ),
-        Pair([
-          AppButton(label: 'Previous', tone: Tone.ghost, disabled: index == 0, onPress: () => setState(() => index -= 1)),
-          AppButton(label: index + 1 >= questions.length ? 'See result' : 'Next', disabled: feedback == null, onPress: next),
-        ]),
         if (feedback != null)
           AppButton(
             label: saved[str(question['id'])] == true ? 'Saved' : 'Bookmark',
@@ -1424,15 +1443,32 @@ class _MockIntroScreenState extends State<MockIntroScreen> with SafeState, _Mock
       if (mocks == null && mocksError.isEmpty) const Loading(),
       if (mocks != null && mock == null) const Empty(title: 'Mock not found', body: 'Go back and open the mock list again.'),
       if (mock != null && state != null) ...[
-        AppCard(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            tx('${mock['questionCount']} questions · ${mock['durationMinutes']} minutes', color: palette.ink, weight: w700),
-            gap(6),
-            tx('${mock['marksPerQuestion']} marks each · negative ${mock['negativeMarks']}', color: palette.muted),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Pair([
+            StatTile(label: 'Questions', value: str(mock['questionCount']), valueSize: 18, labelSize: 12),
+            StatTile(label: 'Minutes', value: str(mock['durationMinutes']), valueSize: 18, labelSize: 12),
+            StatTile(label: 'Marks/Q', value: str(mock['marksPerQuestion']), valueSize: 18, labelSize: 12),
+            StatTile(label: 'Negative', value: str(mock['negativeMarks']), valueSize: 18, labelSize: 12),
           ]),
         ),
-        for (final line in asList(mock['instructions']))
-          Padding(padding: const EdgeInsets.only(bottom: 8), child: tx(str(line), color: palette.muted, lineHeight: 20)),
+        AppCard(
+          child: Column(children: [
+            for (final (icon, line) in [
+              (Icons.event_repeat, 'A fresh personal set every day at 2:00 AM. Questions do not repeat.'),
+              (Icons.looks_one_outlined, 'One attempt per day.'),
+              (Icons.timer_outlined, 'The server keeps the timer and calculates the score.'),
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(icon, size: 18, color: palette.green),
+                  gap(10),
+                  Expanded(child: tx(line, color: palette.muted, size: 13, lineHeight: 18)),
+                ]),
+              ),
+          ]),
+        ),
         // A failed set's own reason wins over the older "being prepared" note from the start call.
         if (!state.ready)
           AppBanner(
@@ -1563,7 +1599,7 @@ class _MockRunScreenState extends State<MockRunScreen> with SafeState {
               child: Container(
                 width: 64,
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: palette.bg, borderRadius: BorderRadius.circular(10)),
+                decoration: BoxDecoration(color: palette.inset, borderRadius: BorderRadius.circular(10)),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   tx('${i + 1}', color: palette.ink, weight: w700),
                   tx(label, color: palette.muted, size: 10, lines: 1),
@@ -1586,7 +1622,29 @@ class _MockRunScreenState extends State<MockRunScreen> with SafeState {
         : '${left.inMinutes.toString().padLeft(2, '0')}:${(left.inSeconds % 60).toString().padLeft(2, '0')}';
     final current = question != null ? answers[str(question['id'])] ?? (selectedKey: '', markedForReview: false) : null;
 
-    return AppScreen(children: [
+    return AppScreen(
+        footer: question == null
+            ? null
+            : Pair([
+                AppButton(
+                    label: 'Previous', tone: Tone.ghost, marginTop: 0, disabled: index == 0, onPress: () => setState(() => index -= 1)),
+                index < questions.length - 1
+                    ? AppButton(label: 'Next', marginTop: 0, onPress: () => setState(() => index += 1))
+                    : AppButton(
+                        label: 'Submit',
+                        marginTop: 0,
+                        // Not awaited: the button must not show a spinner while the dialog is just open.
+                        onPress: () => unawaited(showConfirm(
+                          context,
+                          title: 'Submit this test?',
+                          body: 'You can submit once today. Unanswered questions stay blank. The server calculates the score.',
+                          confirm: 'Submit',
+                          cancel: 'Keep working',
+                          onConfirm: submit,
+                        )),
+                      ),
+              ]),
+        children: [
       Header(
         title: clock,
         subtitle: saved.isNotEmpty ? saved : 'Server timer',
@@ -1612,23 +1670,6 @@ class _MockRunScreenState extends State<MockRunScreen> with SafeState {
           tone: Tone.ghost,
           onPress: () => _setAnswer(str(question['id']), (selectedKey: current.selectedKey, markedForReview: !current.markedForReview)),
         ),
-        Pair([
-          AppButton(label: 'Previous', tone: Tone.ghost, disabled: index == 0, onPress: () => setState(() => index -= 1)),
-          index < questions.length - 1
-              ? AppButton(label: 'Next', onPress: () => setState(() => index += 1))
-              : AppButton(
-                  label: 'Submit',
-                  // Not awaited: the button must not show a spinner while the dialog is just open.
-                  onPress: () => unawaited(showConfirm(
-                    context,
-                    title: 'Submit this test?',
-                    body: 'You can submit once today. Unanswered questions stay blank. The server calculates the score.',
-                    confirm: 'Submit',
-                    cancel: 'Keep working',
-                    onConfirm: submit,
-                  )),
-                ),
-        ]),
       ],
     ]);
   }

@@ -2,11 +2,18 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 
-/// Brand tokens (Green Theme), same as the React Native app.
+/// Design tokens. Light = premium soft surfaces; dark = glassmorphism over a glowing
+/// emerald backdrop. Every screen reads colours from here, so both themes stay consistent.
 class Palette {
   const Palette({
     required this.bg,
+    required this.bgTop,
+    required this.bgBottom,
+    required this.glowA,
+    required this.glowB,
     required this.surface,
+    required this.elevated,
+    required this.inset,
     required this.ink,
     required this.muted,
     required this.line,
@@ -18,58 +25,97 @@ class Palette {
     required this.greenSoft,
     required this.mint,
     required this.amber,
+    required this.gold,
+    required this.goldSoft,
     required this.danger,
     required this.dangerSoft,
     required this.good,
     required this.info,
+    required this.infoSoft,
+    required this.heroStart,
+    required this.heroEnd,
     required this.shadow,
     required this.dark,
   });
 
-  final Color bg, surface, ink, muted, line, primary, green, accent, highlight, greenInk, greenSoft, mint, amber,
-      danger, dangerSoft, good, info, shadow;
+  /// Page base colour and the backdrop gradient + two soft glow blobs.
+  final Color bg, bgTop, bgBottom, glowA, glowB;
+
+  /// `surface`: cards (white in light, translucent glass in dark).
+  /// `elevated`: dialogs and sheets (always mostly opaque).
+  /// `inset`: wells inside cards (inputs, letter chips, calendar cells).
+  final Color surface, elevated, inset;
+  /// `gold` / `goldSoft`: rewards only (streak, achievements, mastered).
+  final Color gold, goldSoft;
+  final Color ink, muted, line, primary, green, accent, highlight, greenInk, greenSoft, mint, amber, danger,
+      dangerSoft, good, info, infoSoft, shadow;
+
+  /// Hero card gradient (home score, profile, tutor). Text on it is always white.
+  final Color heroStart, heroEnd;
   final bool dark;
 
   static const light = Palette(
-    bg: Color(0xFFF3F4F6),
+    bg: Color(0xFFF3F7F4),
+    bgTop: Color(0xFFF8FBF9),
+    bgBottom: Color(0xFFEAF3EE),
+    glowA: Color(0x2E34D399),
+    glowB: Color(0x1F38BDF8),
     surface: Color(0xFFFFFFFF),
+    elevated: Color(0xFFFFFFFF),
+    inset: Color(0xFFF2F6F3),
     ink: Color(0xFF0B1F17),
-    muted: Color(0xFF5B6B63),
-    line: Color(0xFFD7E8DC),
+    muted: Color(0xFF5E6E66),
+    line: Color(0xFFE3ECE6),
     primary: Color(0xFF0B3D2E),
     green: Color(0xFF16A34A),
     accent: Color(0xFF22C55E),
     highlight: Color(0xFFA3E635),
     greenInk: Color(0xFFFFFFFF),
-    greenSoft: Color(0xFFE8F8EE),
-    mint: Color(0xFFA7F3D0),
+    greenSoft: Color(0xFFE6F7ED),
+    mint: Color(0xFFD5F5E3),
     amber: Color(0xFFF59E0B),
-    danger: Color(0xFFEF4444),
-    dangerSoft: Color(0xFFFEE2E2),
+    gold: Color(0xFFD97706),
+    goldSoft: Color(0xFFFEF3C7),
+    danger: Color(0xFFE5484D),
+    dangerSoft: Color(0xFFFDECEC),
     good: Color(0xFF10B981),
-    info: Color(0xFF3B82F6),
-    shadow: Color(0x140B3D2E),
+    info: Color(0xFF2563EB),
+    infoSoft: Color(0xFFEAF1FD),
+    heroStart: Color(0xFF0B3D2E),
+    heroEnd: Color(0xFF15803D),
+    shadow: Color(0x1A0B3D2E),
     dark: false,
   );
 
   static const darkPalette = Palette(
-    bg: Color(0xFF071510),
-    surface: Color(0xFF0F241C),
-    ink: Color(0xFFF0FDF4),
-    muted: Color(0xFF9CB5A8),
-    line: Color(0xFF1F3A2E),
-    primary: Color(0xFFA7F3D0),
+    bg: Color(0xFF040B08),
+    bgTop: Color(0xFF071811),
+    bgBottom: Color(0xFF020604),
+    glowA: Color(0x5522C55E),
+    glowB: Color(0x3D14B8A6),
+    surface: Color(0x17FFFFFF),
+    elevated: Color(0xF00D1C16),
+    inset: Color(0x12FFFFFF),
+    ink: Color(0xFFEFFCF5),
+    muted: Color(0xFFA3BAAF),
+    line: Color(0x24FFFFFF),
+    primary: Color(0xFFB4F5D5),
     green: Color(0xFF22C55E),
     accent: Color(0xFF4ADE80),
-    highlight: Color(0xFFA3E635),
-    greenInk: Color(0xFF052E1C),
-    greenSoft: Color(0xFF143528),
-    mint: Color(0xFF14532D),
+    highlight: Color(0xFFBEF264),
+    greenInk: Color(0xFF03261A),
+    greenSoft: Color(0x2922C55E),
+    mint: Color(0x334ADE80),
     amber: Color(0xFFFBBF24),
+    gold: Color(0xFFFBBF24),
+    goldSoft: Color(0x29FBBF24),
     danger: Color(0xFFF87171),
-    dangerSoft: Color(0xFF3F1D1D),
+    dangerSoft: Color(0x2EF87171),
     good: Color(0xFF34D399),
-    info: Color(0xFF60A5FA),
+    info: Color(0xFF7DB4FF),
+    infoSoft: Color(0x2E60A5FA),
+    heroStart: Color(0x8C15803D),
+    heroEnd: Color(0x5914B8A6),
     shadow: Color(0x59000000),
     dark: true,
   );

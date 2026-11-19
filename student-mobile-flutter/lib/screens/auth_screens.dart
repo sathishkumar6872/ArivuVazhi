@@ -186,9 +186,19 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
                       tx('LEARN • PRACTICE • ACHIEVE', color: const Color(0xFFA7F3D0), letterSpacing: 2.2, size: 11, weight: w700),
                     ]),
                     Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      tx(slide.$1, color: Colors.white, size: 30, weight: w800, lineHeight: 38),
-                      gap(12),
-                      tx(slide.$2, color: const Color(0xFFD1FAE5), size: 15, lineHeight: 22),
+                      // Fixed-height text area so the button does not jump between slides.
+                      SizedBox(
+                        height: 196,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            tx(slide.$1, color: Colors.white, size: 27, weight: w800, lineHeight: 34, lines: 3),
+                            gap(12),
+                            tx(slide.$2, color: const Color(0xFFD1FAE5), size: 15, lineHeight: 22, lines: 3),
+                          ],
+                        ),
+                      ),
                       gap(22),
                       Dots(count: 3, index: splashPage),
                       AppButton(label: 'Get Started', icon: Icons.arrow_forward, onPress: () => _setMode(_AuthMode.login)),

@@ -45,6 +45,14 @@ class ArivuVazhiApp extends StatelessWidget {
                 selectionColor: palette.green.withAlpha(0x55),
                 selectionHandleColor: palette.green,
               ),
+              // Floating, rounded snackbars that match the cards.
+              snackBarTheme: SnackBarThemeData(
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: palette.dark ? const Color(0xF0143326) : const Color(0xFF0B3D2E),
+                contentTextStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                insetPadding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+              ),
             ),
             home: AnnotatedRegion<SystemUiOverlayStyle>(
               value: palette.dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
@@ -155,7 +163,17 @@ class _RootState extends State<Root> with WidgetsBindingObserver {
     } else {
       page = Shell(user: current, setUser: _setUser, onLogout: _logout);
     }
-    return Scaffold(resizeToAvoidBottomInset: true, body: page);
+    // One backdrop (gradient + glow) behind every screen; screens themselves are transparent.
+    return Scaffold(
+      resizeToAvoidBottomInset: true,
+      backgroundColor: Colors.transparent,
+      body: AppBackground(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          child: KeyedSubtree(key: ValueKey(page.runtimeType), child: page),
+        ),
+      ),
+    );
   }
 }
 
@@ -319,17 +337,48 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _systemBack();
       },
-      child: Column(children: [
-        Expanded(
+      child: Builder(builder: (context) {
+        final showTabs = !fullScreen && !keyboardOpen;
+        final media = MediaQuery.of(context);
+        // Content scrolls under the floating glass tab bar, so reserve its height as bottom padding.
+        final screen = MediaQuery(
+          data: media.copyWith(
+            padding: media.padding.copyWith(bottom: showTabs ? media.padding.bottom + tabBarSpace : media.padding.bottom),
+          ),
           child: SafeArea(
             top: false,
             bottom: fullScreen,
-            // ObjectKey: a new route object always gets a fresh screen state.
-            child: KeyedSubtree(key: ObjectKey(current), child: _screen(current)),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(animation),
+                  child: child,
+                ),
+              ),
+              // ObjectKey: a new route object always gets a fresh screen state.
+              child: KeyedSubtree(key: ObjectKey(current), child: _screen(current)),
+            ),
           ),
-        ),
-        if (!fullScreen && !keyboardOpen) AppTabBar(tab: tab.name, onChange: goTab),
-      ]),
+        );
+        return Stack(children: [
+          Positioned.fill(child: screen),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+              offset: showTabs ? Offset.zero : const Offset(0, 1.6),
+              child: IgnorePointer(ignoring: !showTabs, child: AppTabBar(tab: tab.name, onChange: goTab)),
+            ),
+          ),
+        ]);
+      }),
     );
   }
 }
