@@ -69,6 +69,8 @@ const TRUSTED = [
 const AGGREGATOR = /(job|naukri|sarkari|currentaffair|current-affair|gktoday|adda247|testbook|jagranjosh|byjus|unacademy|examveda|gkquiz|affairscloud|studyiq|vision|drishti|insightsonindia|wikipedia)/;
 
 type Candidate = {
+  /** Day the event happened (YYYY-MM-DD, IST). */
+  date: string;
   title: string;
   category: string;
   points: string[];
@@ -166,6 +168,7 @@ JSON shape: {"items":[{"title":"","category":"","points":[""],"facts":[""],"sour
       const row = (item || {}) as Record<string, unknown>;
       const category = str(row.category, 30).toLowerCase();
       return {
+        date: newsDay,
         title: str(row.title, 200),
         category: (CATEGORIES as readonly string[]).includes(category) ? category : "national",
         points: strList(row.points, 4),
@@ -355,6 +358,61 @@ export async function startCurrentAffairsJob(trigger: "schedule" | "boot" | "man
   return { started: true, runId: run.id };
 }
 
+/** Run the three checks on every candidate. */
+async function validate(candidates: Candidate[]) {
+  return pool(candidates, CHECK_CONCURRENCY, async (item) => {
+    const checks: Check[] = [];
+    checks.push(await checkSources(item));
+    if (checks[0].passed) checks.push(await checkIndependently(item, item.date));
+    if (checks.every((check) => check.passed)) checks.push(await recheckWithChatGpt(item, item.date));
+    return { item, checks, passed: checks.length === 3 && checks.every((check) => check.passed) };
+  });
+}
+
+/** Save checked candidates: publish passing ones (up to `max`), keep the rest as rejected for the admin. */
+async function saveOutcomes(
+  outcomes: Awaited<ReturnType<typeof validate>>,
+  max: number,
+  mode: "daily" | "archive",
+  counts: { ready: number; failed: number },
+) {
+  let published = 0;
+  const orderByDay = new Map<string, number>();
+  for (const { item, checks, passed } of outcomes) {
+    const base = { id: nid(), newsDay: item.date, mode, category: item.category, facts: item.facts, sources: item.sources, checks };
+    if (!passed || published >= max) {
+      counts.failed += 1;
+      const failedCheck = checks.find((check) => !check.passed);
+      await CurrentAffair.create({
+        ...base,
+        en: { title: item.title, points: item.points },
+        status: "rejected",
+        rejectReason: failedCheck ? `${failedCheck.step}: ${failedCheck.note}` : "over the limit",
+      });
+      continue;
+    }
+    let written: Awaited<ReturnType<typeof write>> = null;
+    try {
+      written = await write(item);
+    } catch (error) {
+      console.warn(`Current affairs write failed: ${error instanceof Error ? error.message : error}`);
+    }
+    if (!written) {
+      counts.failed += 1;
+      await CurrentAffair.create({ ...base, en: { title: item.title, points: item.points }, status: "rejected", rejectReason: "write: final notes were incomplete" });
+      continue;
+    }
+    // Daily items keep their place after anything already published for that day.
+    const start = orderByDay.has(item.date)
+      ? orderByDay.get(item.date)!
+      : await CurrentAffair.countDocuments({ newsDay: item.date, status: "published" });
+    orderByDay.set(item.date, start + 1);
+    await CurrentAffair.create({ ...base, ...written, status: "published", order: start });
+    published += 1;
+    counts.ready += 1;
+  }
+}
+
 async function execute(run: InstanceType<typeof JobRun>, newsDay: string) {
   try {
     await assertAiBudgetAvailable("Current affairs");
@@ -365,43 +423,7 @@ async function execute(run: InstanceType<typeof JobRun>, newsDay: string) {
       .lean();
     const candidates = await collect(newsDay, recent.map((row) => row.en?.title || "").filter(Boolean));
     if (!candidates.length) throw new Error("No news items were collected.");
-
-    const outcomes = await pool(candidates, CHECK_CONCURRENCY, async (item) => {
-      const checks: Check[] = [];
-      checks.push(await checkSources(item));
-      if (checks[0].passed) checks.push(await checkIndependently(item, newsDay));
-      if (checks.every((check) => check.passed)) checks.push(await recheckWithChatGpt(item, newsDay));
-      return { item, checks, passed: checks.length === 3 && checks.every((check) => check.passed) };
-    });
-
-    let order = 0;
-    for (const { item, checks, passed } of outcomes) {
-      const base = { id: nid(), newsDay, category: item.category, facts: item.facts, sources: item.sources, checks };
-      if (!passed || order >= MAX_ITEMS) {
-        run.failed += 1;
-        const failedCheck = checks.find((check) => !check.passed);
-        await CurrentAffair.create({
-          ...base,
-          en: { title: item.title, points: item.points },
-          status: "rejected",
-          rejectReason: failedCheck ? `${failedCheck.step}: ${failedCheck.note}` : "over the daily limit",
-        });
-        continue;
-      }
-      let written: Awaited<ReturnType<typeof write>> = null;
-      try {
-        written = await write(item);
-      } catch (error) {
-        console.warn(`Current affairs write failed: ${error instanceof Error ? error.message : error}`);
-      }
-      if (!written) {
-        run.failed += 1;
-        await CurrentAffair.create({ ...base, en: { title: item.title, points: item.points }, status: "rejected", rejectReason: "write: final notes were incomplete" });
-        continue;
-      }
-      await CurrentAffair.create({ ...base, ...written, status: "published", order: order++ });
-      run.ready += 1;
-    }
+    await saveOutcomes(await validate(candidates), MAX_ITEMS, "daily", run);
     run.status = "done";
   } catch (error) {
     run.status = "failed";
@@ -410,6 +432,129 @@ async function execute(run: InstanceType<typeof JobRun>, newsDay: string) {
   run.finishedAt = new Date();
   await run.save();
   console.log(JSON.stringify({ job: JOB, newsDay, status: run.status, published: run.ready, dropped: run.failed, error: run.error || undefined }));
+}
+
+// ---------------------------------------------------------------- archive (last 18 months, one time)
+
+const ARCHIVE_JOB = "current_affairs_month";
+const ARCHIVE_MONTHS = 18;
+const MONTHS_PER_NIGHT = 2;
+const MONTH_ITEMS = 25;
+
+/** "2025-06" … for the last 18 months, newest first (the current month counts, up to yesterday). */
+function archiveMonths(today = dayKey()) {
+  const [y, m] = today.split("-").map(Number);
+  return Array.from({ length: ARCHIVE_MONTHS }, (_, i) => {
+    const d = new Date(Date.UTC(y, m - 1 - i, 1));
+    return d.toISOString().slice(0, 7);
+  });
+}
+
+function lastDayOfMonth(month: string) {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+/** Exam-relevant events of one month, each with the exact date it happened. */
+async function collectMonth(month: string, until: string, known: string[]): Promise<Candidate[]> {
+  const from = `${month}-01`;
+  const to = lastDayOfMonth(month) < until ? lastDayOfMonth(month) : until;
+  const system =
+    "You are a careful current-affairs editor for Tamil Nadu government exam aspirants (TNPSC Group 1, 2, 4; also useful for UPSC). " +
+    "Report only facts you found in the search results. Never guess names, numbers or dates. Return ONLY valid JSON.";
+  const user = `Use web search. List the ${MONTH_ITEMS + 5} most exam-relevant news events that happened between ${from} and ${to} (India Standard Time).
+Spread them across the whole period (at least 4 per week). Cover Tamil Nadu, India (polity, government schemes, economy, science and technology, defence, environment), international affairs, awards, sports and important appointments. Skip opinion, crime, celebrity, film and gossip.
+${known.length ? `Already covered, do not repeat:\n${known.slice(0, 60).map((t) => `- ${t}`).join("\n")}\n` : ""}
+For each event give:
+- date: the exact day it happened, YYYY-MM-DD
+- title: one clear line
+- category: one of ${CATEGORIES.join(", ")}
+- points: 3 short exam-focused points
+- facts: 3 to 6 short, checkable facts (names, numbers, dates, places), one per string
+- sources: 2 or 3 links to the actual news articles, each on a different website (prefer PIB, government sites, The Hindu, Indian Express, DD News, AIR, Reuters, BBC)
+JSON shape: {"items":[{"date":"YYYY-MM-DD","title":"","category":"","points":[""],"facts":[""],"sources":[{"title":"","url":"https://..."}]}]}`;
+  const parsed = extractJson(await chatgpt(system, user, true)) as { items?: unknown[] };
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  return items
+    .map((item) => {
+      const row = (item || {}) as Record<string, unknown>;
+      const category = str(row.category, 30).toLowerCase();
+      return {
+        date: str(row.date, 10),
+        title: str(row.title, 200),
+        category: (CATEGORIES as readonly string[]).includes(category) ? category : "national",
+        points: strList(row.points, 4),
+        facts: strList(row.facts, 6),
+        sources: (Array.isArray(row.sources) ? row.sources : [])
+          .map((source) => {
+            const s = (source || {}) as Record<string, unknown>;
+            return { title: str(s.title, 200), url: str(s.url, 500) };
+          })
+          .filter((source) => /^https?:\/\//i.test(source.url))
+          .slice(0, 4),
+      };
+    })
+    // Only items dated inside the requested window.
+    .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.date) && item.date >= from && item.date <= to && item.title && item.facts.length >= 2);
+}
+
+let archiveRunning: Promise<unknown> | null = null;
+
+/**
+ * One night's share of the one-time archive: the next months (newest first) that are not
+ * done yet. A month that fails is tried again on a later night.
+ */
+export async function startCurrentAffairsArchive(): Promise<{ started: boolean; months?: string[]; reason?: string }> {
+  if (archiveRunning) return { started: false, reason: "already_running" };
+  const months = archiveMonths();
+  const done = new Set(
+    (await JobRun.find({ job: ARCHIVE_JOB, status: "done", dayKey: { $in: months } }).select("dayKey").lean()).map((run) => run.dayKey),
+  );
+  const recent = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  if (await JobRun.exists({ job: ARCHIVE_JOB, status: "running", createdAt: { $gte: recent } })) {
+    return { started: false, reason: "already_running" };
+  }
+  // The current month is archived once up to yesterday; later days come from the daily feed.
+  const todo = months.filter((month) => !done.has(month)).slice(0, MONTHS_PER_NIGHT);
+  if (!todo.length) return { started: false, reason: "archive_complete" };
+  archiveRunning = (async () => {
+    for (const month of todo) await archiveMonth(month);
+  })()
+    .catch((error) => console.warn(`Current affairs archive failed: ${error instanceof Error ? error.message : error}`))
+    .finally(() => {
+      archiveRunning = null;
+    });
+  return { started: true, months: todo };
+}
+
+async function archiveMonth(month: string) {
+  const run = await JobRun.create({ id: nid(), job: ARCHIVE_JOB, dayKey: month, trigger: "schedule" });
+  const from = `${month}-01`;
+  const to = lastDayOfMonth(month);
+  try {
+    await assertAiBudgetAvailable("Current affairs archive");
+    await CurrentAffair.deleteMany({ mode: "archive", newsDay: { $gte: from, $lte: to }, status: { $ne: "published" } });
+    const existing = await CurrentAffair.find({ newsDay: { $gte: from, $lte: to }, status: "published" }).select("en.title").lean();
+    const candidates = await collectMonth(month, shiftDay(dayKey(), -1), existing.map((row) => row.en?.title || "").filter(Boolean));
+    if (!candidates.length) throw new Error("No events were collected for this month.");
+    await saveOutcomes(await validate(candidates), MONTH_ITEMS, "archive", run);
+    // A month with almost nothing published is retried on a later night.
+    run.status = run.ready >= 5 ? "done" : "failed";
+    if (run.status === "failed") run.error = `Only ${run.ready} items passed the checks.`;
+  } catch (error) {
+    run.status = "failed";
+    run.error = error instanceof Error ? error.message.slice(0, 300) : "unknown";
+  }
+  run.finishedAt = new Date();
+  await run.save();
+  console.log(JSON.stringify({ job: ARCHIVE_JOB, month, status: run.status, published: run.ready, dropped: run.failed, error: run.error || undefined }));
+}
+
+/** Archive progress for the admin Today page. */
+async function archiveStatus() {
+  const months = archiveMonths();
+  const done = await JobRun.distinct("dayKey", { job: ARCHIVE_JOB, status: "done", dayKey: { $in: months } });
+  return { monthsDone: done.length, monthsTotal: months.length, running: Boolean(archiveRunning) };
 }
 
 /**
@@ -444,6 +589,7 @@ export async function currentAffairsStatus() {
     hidden: byStatus.hidden || 0,
     running: Boolean(running),
     lastRun: last ? { newsDay: last.dayKey, status: last.status, error: last.error || "", finishedAt: last.finishedAt } : null,
+    archive: await archiveStatus(),
   };
 }
 
@@ -451,6 +597,22 @@ export async function currentAffairsStatus() {
  * In-process 03:00 IST schedule plus a catch-up on boot. A free-tier host that sleeps
  * must also be woken by an external cron calling POST /api/v1/internal/jobs/current-affairs.
  */
+/** Nightly: yesterday's daily feed first, then this night's share of the archive. */
+export async function runNightly(trigger: "schedule" | "manual") {
+  try {
+    const start = await startCurrentAffairsJob(trigger);
+    if (start.started && running) await running;
+  } catch (error) {
+    console.warn(`Current affairs job failed: ${error instanceof Error ? error.message : error}`);
+  }
+  try {
+    return await startCurrentAffairsArchive();
+  } catch (error) {
+    console.warn(`Current affairs archive failed: ${error instanceof Error ? error.message : error}`);
+    return { started: false, reason: "error" };
+  }
+}
+
 export function startCurrentAffairsScheduler() {
   if (process.env.CURRENT_AFFAIRS_JOB === "off") {
     console.log("Current affairs job disabled (CURRENT_AFFAIRS_JOB=off).");
@@ -459,7 +621,7 @@ export function startCurrentAffairsScheduler() {
   const scheduleNext = () => {
     const next = nextIstRun(new Date(), 3);
     const timer = setTimeout(() => {
-      void startCurrentAffairsJob("schedule").catch((error) => console.warn(`Current affairs job failed: ${error?.message || error}`));
+      void runNightly("schedule");
       scheduleNext();
     }, next.getTime() - Date.now());
     timer.unref?.();

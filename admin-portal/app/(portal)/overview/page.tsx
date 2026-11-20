@@ -20,6 +20,7 @@ type Overview = {
     hidden: number;
     running: boolean;
     lastRun: { newsDay: string; status: string; error: string } | null;
+    archive?: { monthsDone: number; monthsTotal: number; running: boolean };
   };
 };
 
@@ -59,10 +60,8 @@ export default function OverviewPage() {
       const result = await api<{ started: boolean; reason?: string }>("/admin/jobs/current-affairs", { method: "POST", body: "{}" });
       setMessage(
         result.started
-          ? "Current affairs run started. It takes a few minutes; refresh to see the result."
-          : result.reason === "already_published"
-            ? "Yesterday's current affairs are already published."
-            : "A current affairs run is already in progress.",
+          ? "Started: yesterday's news (if missing) and the next archive months. This takes a while; refresh later."
+          : "A current affairs run is already in progress.",
       );
       setTimeout(reload, 3000);
     } catch (err) {
@@ -161,15 +160,21 @@ export default function OverviewPage() {
           <Count label="Published to students" value={ca?.published || 0} />
           <Count label="Dropped by checks" value={ca?.dropped || 0} />
           {ca?.hidden ? <Count label="Hidden by student reports" value={ca.hidden} bad /> : null}
+          {ca?.archive ? (
+            <Count
+              label={`Archive (last ${ca.archive.monthsTotal} months)${ca.archive.running ? " · running" : ""}`}
+              value={`${ca.archive.monthsDone}/${ca.archive.monthsTotal}`}
+            />
+          ) : null}
           {caFailed && ca?.lastRun?.error ? (
             <Typography fontSize={13} color="error.main" sx={{ wordBreak: "break-word" }}>{ca.lastRun.error}</Typography>
           ) : (
-            <Typography fontSize={13} color="text.secondary">Runs at 3:00 AM for yesterday&apos;s news. Only fully verified items are published.</Typography>
+            <Typography fontSize={13} color="text.secondary">Runs at 3:00 AM for yesterday&apos;s news, then 2 archive months. Only fully verified items are published.</Typography>
           )}
           <Box sx={{ flex: 1 }} />
           <Button
             variant="outlined"
-            disabled={runningCa || Boolean(ca?.running) || caOk}
+            disabled={runningCa || Boolean(ca?.running) || Boolean(ca?.archive?.running) || (caOk && ca?.archive?.monthsDone === ca?.archive?.monthsTotal)}
             onClick={runCurrentAffairs}
             startIcon={runningCa ? <CircularProgress size={16} color="inherit" /> : undefined}
           >

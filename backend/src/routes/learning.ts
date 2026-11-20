@@ -330,21 +330,45 @@ learningRouter.post(
 /** Reports on one current-affairs item before it is hidden from everyone. */
 const CA_REPORTS_TO_HIDE = 2;
 
-/** Latest published day of current affairs (or ?day=YYYY-MM-DD), in the student's exam language. */
+/**
+ * Published current affairs in the student's exam language.
+ * - no filter: the latest published day
+ * - ?day=YYYY-MM-DD: one day
+ * - ?from=YYYY-MM-DD&to=YYYY-MM-DD: a date range (newest first, up to 300 items)
+ * - ?category=…: one category, combined with any of the above
+ */
 learningRouter.get(
   "/current-affairs",
   wrap(async (req, res) => {
     studentId(req);
-    const asked = typeof req.query.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day) ? req.query.day : "";
+    const isDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const category = typeof req.query.category === "string" && /^[a-z]{3,20}$/.test(req.query.category) ? req.query.category : "";
+    const base: Record<string, unknown> = { status: "published", ...(category ? { category } : {}) };
     const days = (await CurrentAffair.distinct("newsDay", { status: "published" })).sort().reverse().slice(0, 14) as string[];
-    const day = asked && days.includes(asked) ? asked : days[0] || "";
-    if (!day) return res.json({ data: { day: "", days: [], items: [] } });
+    let from = "";
+    let to = "";
+    if (isDay(req.query.from) || isDay(req.query.to)) {
+      from = isDay(req.query.from) ? req.query.from : "0000-01-01";
+      to = isDay(req.query.to) ? req.query.to : "9999-12-31";
+      if (from > to) [from, to] = [to, from];
+    } else {
+      const latest = isDay(req.query.day)
+        ? req.query.day
+        : (await CurrentAffair.findOne(base).sort({ newsDay: -1 }).select("newsDay").lean())?.newsDay || "";
+      from = latest;
+      to = latest;
+    }
+    if (!from) return res.json({ data: { day: "", from: "", to: "", days, items: [] } });
     const lang = req.user!.language === "ta" ? "ta" : "en";
-    const rows = await CurrentAffair.find({ newsDay: day, status: "published" }).sort({ order: 1 }).lean();
+    const rows = await CurrentAffair.find({ ...base, newsDay: { $gte: from, $lte: to } })
+      .sort({ newsDay: -1, order: 1 })
+      .limit(300)
+      .lean();
     const items = rows.map((row) => {
       const text = lang === "ta" && row.ta?.title ? row.ta : row.en;
       return {
         id: row.id,
+        newsDay: row.newsDay,
         category: row.category,
         title: text?.title || "",
         points: text?.points || [],
@@ -352,7 +376,7 @@ learningRouter.get(
         sources: (row.sources || []).map((source) => ({ title: source.title || "", url: source.url || "" })),
       };
     });
-    res.json({ data: { day, days, items } });
+    res.json({ data: { day: from === to ? from : "", from, to, days, items } });
   }),
 );
 

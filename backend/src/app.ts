@@ -14,7 +14,7 @@ import { studentRouter } from "./routes/student.js";
 import { learningRouter } from "./routes/learning.js";
 import { adminRouter } from "./routes/admin.js";
 import { getDailyMockRun, startDailyMockJob } from "./jobs.js";
-import { startCurrentAffairsJob } from "./current-affairs.js";
+import { runNightly } from "./current-affairs.js";
 import { filesRouter, storageAdminRouter } from "./routes/storage.js";
 import { pyqAdminRouter } from "./routes/pyq-admin.js";
 import { completeGoogleAuth } from "./storage/index.js";
@@ -104,14 +104,11 @@ export function createApp() {
       next(error);
     }
   });
-  // Daily current affairs for yesterday's news (call at 03:00 IST). Safe to call again: skips a published day.
-  app.post("/api/v1/internal/jobs/current-affairs", cronOnly, async (_req, res, next) => {
-    try {
-      const start = await startCurrentAffairsJob("manual");
-      res.status(start.started ? 202 : 200).json({ data: start });
-    } catch (error) {
-      next(error);
-    }
+  // Nightly current affairs (call at 03:00 IST): yesterday's feed, then 2 months of the one-time
+  // 18-month archive. Returns at once; safe to call again (published days and done months are skipped).
+  app.post("/api/v1/internal/jobs/current-affairs", cronOnly, (_req, res) => {
+    void runNightly("manual");
+    res.status(202).json({ data: { started: true } });
   });
   app.get("/api/v1/internal/jobs/daily-mocks/:runId", cronOnly, async (req, res, next) => {
     try {

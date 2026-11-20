@@ -1029,6 +1029,8 @@ export const CurrentAffair = mongoose.model(
       id: { type: String, required: true, unique: true },
       /** The day the news happened (IST). */
       newsDay: { type: String, required: true, index: true },
+      /** "daily" = the 03:00 feed; "archive" = the one-time 18-month backfill. */
+      mode: { type: String, enum: ["daily", "archive"], default: "daily" },
       category: { type: String, default: "national" },
       facts: { type: [String], default: [] },
       sources: { type: [{ title: String, url: String }], default: [] },

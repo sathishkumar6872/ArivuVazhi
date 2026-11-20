@@ -68,11 +68,17 @@ class CurrentAffairsScreen extends StatefulWidget {
 }
 
 class _CurrentAffairsScreenState extends State<CurrentAffairsScreen> with SafeState {
-  String day = '';
-  List<dynamic> days = [];
+  /// 'latest', '7', '30', '90' (days back) or 'custom' (picked dates).
+  String preset = 'latest';
+  String from = '';
+  String to = '';
+  String category = '';
   List<dynamic>? items;
   String error = '';
   final Set<String> reported = {};
+  int _request = 0;
+
+  static const _presets = [('latest', 'Latest'), ('7', '7 days'), ('30', '30 days'), ('90', '3 months')];
 
   @override
   void initState() {
@@ -80,19 +86,66 @@ class _CurrentAffairsScreenState extends State<CurrentAffairsScreen> with SafeSt
     _load();
   }
 
-  void _load([String? pick]) {
+  void _load() {
+    final request = ++_request;
     setState(() {
       items = null;
       error = '';
     });
-    api('/current-affairs${pick == null ? '' : '?day=$pick'}').then((value) {
+    final params = <String, String>{
+      if (from.isNotEmpty) 'from': from,
+      if (to.isNotEmpty) 'to': to,
+      if (category.isNotEmpty) 'category': category,
+    };
+    final query = params.isEmpty ? '' : '?${Uri(queryParameters: params).query}';
+    api('/current-affairs$query').then((value) {
+      if (request != _request) return; // a newer filter is already loading
       final data = asMap(value);
       safe(() {
-        day = str(data['day']);
-        days = asList(data['days']);
         items = asList(data['items']);
+        if (preset == 'latest') {
+          from = str(data['from']);
+          to = str(data['to']);
+        }
       });
-    }).catchError((err) => safe(() => error = errorText(err)));
+    }).catchError((err) {
+      if (request == _request) safe(() => error = errorText(err));
+    });
+  }
+
+  void _pickPreset(String value) {
+    setState(() {
+      preset = value;
+      if (value == 'latest') {
+        from = '';
+        to = '';
+      } else {
+        to = todayKey();
+        from = shiftDay(to, -(int.parse(value) - 1));
+      }
+    });
+    _load();
+  }
+
+  Future<void> _pickDates() async {
+    DateTime parse(String day) => DateTime.parse(day);
+    final today = parse(todayKey());
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: today.subtract(const Duration(days: 730)),
+      lastDate: today,
+      initialDateRange: from.isNotEmpty && to.isNotEmpty ? DateTimeRange(start: parse(from), end: parse(to)) : null,
+      helpText: 'Select a date or a date range',
+      saveText: 'Show',
+    );
+    if (picked == null || !mounted) return;
+    String key(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    setState(() {
+      preset = 'custom';
+      from = key(picked.start);
+      to = key(picked.end);
+    });
+    _load();
   }
 
   Future<void> _report(String id) async {
@@ -104,11 +157,52 @@ class _CurrentAffairsScreenState extends State<CurrentAffairsScreen> with SafeSt
     }
   }
 
+  String get _rangeLabel {
+    if (from.isEmpty) return '';
+    if (from == to) return 'News of ${prettyDay(from)}';
+    return '${prettyDay(from)} – ${prettyDay(to)}';
+  }
+
+  Widget _chip(Palette palette, String label, bool active, VoidCallback onTap, {IconData? icon}) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Tap(
+        label: label,
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: active
+              ? BoxDecoration(color: palette.green, borderRadius: BorderRadius.circular(99))
+              : glassBox(palette, radius: 99, shadow: false),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (icon != null) ...[Icon(icon, size: 15, color: active ? palette.greenInk : palette.ink), gap(6)],
+            tx(label, color: active ? palette.greenInk : palette.ink, size: 13, weight: w700),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
     final list = items ?? const [];
-    final quiz = list.where((item) => item['quiz'] is Map && str(item['quiz']['stem']).isNotEmpty).toList();
+    final quiz = list.where((item) => item['quiz'] is Map && str(item['quiz']['stem']).isNotEmpty).take(20).toList();
+    final multiDay = from.isNotEmpty && from != to;
+    final rows = <Widget>[];
+    String lastDay = '';
+    for (final item in list) {
+      final day = str(item['newsDay']);
+      if (multiDay && day != lastDay) {
+        rows.add(Padding(
+          padding: EdgeInsets.only(top: rows.isEmpty ? 0 : 8, bottom: 8),
+          child: tx(prettyDay(day), color: palette.muted, size: 13, weight: w800, letterSpacing: 0.4),
+        ));
+        lastDay = day;
+      }
+      rows.add(_item(context, palette, item));
+    }
     return AppScreen(
       footer: quiz.isEmpty
           ? null
@@ -116,38 +210,47 @@ class _CurrentAffairsScreenState extends State<CurrentAffairsScreen> with SafeSt
               label: 'Quick ${quiz.length} questions',
               icon: Icons.bolt,
               marginTop: 0,
-              onPress: () => widget.go(AppRoute('currentAffairsQuiz', {'items': quiz, 'day': day})),
+              onPress: () => widget.go(AppRoute('currentAffairsQuiz', {'items': quiz, 'day': from})),
             ),
       children: [
-        Header(title: 'Current affairs', subtitle: day.isEmpty ? null : 'News of ${prettyDay(day)} · verified', onBack: widget.back),
-        if (days.length > 1)
-          SizedBox(
-            height: 40,
-            child: ListView(scrollDirection: Axis.horizontal, children: [
-              for (final d in days.take(7))
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Tap(
-                    label: str(d),
-                    onTap: () => _load(str(d)),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                      decoration: str(d) == day
-                          ? BoxDecoration(color: palette.green, borderRadius: BorderRadius.circular(99))
-                          : glassBox(palette, radius: 99, shadow: false),
-                      child: tx(prettyDay(str(d)),
-                          color: str(d) == day ? palette.greenInk : palette.ink, size: 13, weight: w700),
-                    ),
-                  ),
-                ),
-            ]),
-          ),
-        gap(12),
+        Header(
+          title: 'Current affairs',
+          subtitle: _rangeLabel.isEmpty ? null : '$_rangeLabel · ${list.length} verified',
+          onBack: widget.back,
+        ),
+        SizedBox(
+          height: 40,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            for (final (value, label) in _presets) _chip(palette, label, preset == value, () => _pickPreset(value)),
+            _chip(palette, preset == 'custom' ? _rangeLabel : 'Pick dates', preset == 'custom', _pickDates, icon: Icons.calendar_month),
+          ]),
+        ),
+        gap(10),
+        SizedBox(
+          height: 40,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            _chip(palette, 'All', category.isEmpty, () {
+              setState(() => category = '');
+              _load();
+            }),
+            for (final entry in _categories.entries)
+              _chip(palette, entry.value.$1, category == entry.key, () {
+                setState(() => category = entry.key);
+                _load();
+              }),
+          ]),
+        ),
+        gap(14),
         if (error.isNotEmpty) AppBanner(message: error),
         if (items == null && error.isEmpty) const Loading(),
-        for (final item in list) _item(context, palette, item),
+        ...rows,
         if (items != null && list.isEmpty)
-          const Empty(title: 'No updates yet', body: "Yesterday's verified current affairs appear here every morning."),
+          Empty(
+            title: 'Nothing here',
+            body: from.isEmpty
+                ? "Yesterday's verified current affairs appear here every morning."
+                : 'No verified updates for these dates${category.isEmpty ? '' : ' in this category'}. Try a wider range.',
+          ),
         if (list.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4),

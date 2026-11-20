@@ -37,7 +37,7 @@ import { getGeminiSettings, testGeminiConnection } from "../gemini-settings.js";
 import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
 import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
-import { currentAffairsStatus, startCurrentAffairsJob } from "../current-affairs.js";
+import { currentAffairsStatus, runNightly } from "../current-affairs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
 
 export const adminRouter = Router();
@@ -1211,9 +1211,10 @@ adminRouter.post(
 adminRouter.post(
   "/jobs/current-affairs",
   wrap(async (req, res) => {
-    const start = await startCurrentAffairsJob("manual");
-    if (start.started) await audit(req.user!.id, "job_trigger", "job", "current_affairs");
-    res.status(start.started ? 202 : 200).json({ data: start });
+    // Yesterday's feed (if missing) and the next archive months; runs in the background.
+    void runNightly("manual");
+    await audit(req.user!.id, "job_trigger", "job", "current_affairs");
+    res.status(202).json({ data: { started: true } });
   }),
 );
 
