@@ -268,7 +268,7 @@ studentRouter.get(
     const examId = req.user!.primaryExamId;
     const [sessions, examTopics, attempts] = await Promise.all([
       PracticeSession.find({ studentId: owner(req), kind: { $ne: "retry" } }).select("examId answers completedAt").lean(),
-      examId ? Topic.find({ examId, status: "published" }).select("id").lean() : Promise.resolve([]),
+      examId ? Topic.find({ examId, status: "published", kind: { $ne: "current_affairs" } }).select("id").lean() : Promise.resolve([]),
       MockAttempt.find({ studentId: owner(req), status: "submitted" })
         .sort({ submittedAt: 1 })
         .select("mockId rawScore maxScore submittedAt")

@@ -191,7 +191,8 @@ export async function generateDailyMockSet(input: { studentId: string; mockId: s
     const [exam, student, subjects] = await Promise.all([
       Exam.findOne({ id: mock.examId, lifecycle: "published" }).lean(),
       User.findOne({ id: input.studentId }).select("language").lean(),
-      Subject.find({ examId: mock.examId, status: "published" }).sort({ order: 1 }).lean(),
+      // Current affairs stay out of the exam-pattern mock sections.
+      Subject.find({ examId: mock.examId, status: "published", kind: { $ne: "current_affairs" } }).sort({ order: 1 }).lean(),
     ]);
     if (!exam) throw new HttpError(404, "Published exam not found", "NOT_FOUND");
     const topics = await Topic.find({ examId: exam.id, status: "published", subjectId: { $in: subjects.map((subject) => subject.id) } }).lean();

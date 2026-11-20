@@ -122,7 +122,7 @@ async function syllabusOutline(examId?: string, query = ""): Promise<string> {
   }
   if (!exam) return "";
 
-  const subjects = await Subject.find({ examId: exam.id, status: { $in: ["published", "approved"] } })
+  const subjects = await Subject.find({ examId: exam.id, status: { $in: ["published", "approved"] }, kind: { $ne: "current_affairs" } })
     .sort({ order: 1 })
     .lean();
   if (!subjects.length) {

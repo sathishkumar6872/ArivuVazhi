@@ -1,3 +1,4 @@
+import { isAggregatorUrl } from "../current-affairs.js";
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../auth.js";
@@ -373,7 +374,9 @@ learningRouter.get(
         title: text?.title || "",
         points: text?.points || [],
         quiz: text?.quiz || null,
-        sources: (row.sources || []).map((source) => ({ title: source.title || "", url: source.url || "" })),
+        sources: (row.sources || [])
+          .filter((source) => !isAggregatorUrl(source.url || ""))
+          .map((source) => ({ title: source.title || "", url: source.url || "" })),
       };
     });
     res.json({ data: { day: from === to ? from : "", from, to, days, items } });
@@ -395,6 +398,8 @@ learningRouter.post(
     const updated = await CurrentAffair.findOneAndUpdate({ id: item.id }, { $inc: { reportCount: 1 } }, { new: true }).lean();
     if (updated && (updated.reportCount || 0) >= CA_REPORTS_TO_HIDE) {
       await CurrentAffair.updateOne({ id: item.id }, { $set: { status: "hidden" } });
+      // Its practice questions go too.
+      await Question.updateMany({ currentAffairId: item.id }, { $set: { status: "retired" } });
     }
     res.status(201).json({ data: { reported: true, alreadyReported: false } });
   }),

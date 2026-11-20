@@ -280,7 +280,8 @@ adminRouter.post(
     // Non-destructive merge: matching subjects keep their IDs (and their topics,
     // questions and student progress); new ones wait in validation for approval;
     // ones no longer listed are withdrawn (hidden), never deleted.
-    const existingSubjects = await Subject.find({ examId: body.examId }).lean();
+    // Current-affairs subjects are managed by their own job; a syllabus refresh never touches them.
+    const existingSubjects = await Subject.find({ examId: body.examId, kind: { $ne: "current_affairs" } }).lean();
     const plan = planSyllabusMerge(existingSubjects, fetched.subjects);
     await Promise.all([
       ...plan.keep.map((item) =>

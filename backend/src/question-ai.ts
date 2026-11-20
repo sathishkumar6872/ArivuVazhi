@@ -237,7 +237,10 @@ async function pickTopicAnchor(input: {
   subjectId?: string;
 }): Promise<{ topic: any; subject: any }> {
   if (!input.topicId && input.topicIds?.length) {
-    return pickTopicAnchor({ examId: input.examId, topicId: input.topicIds[Math.floor(Math.random() * input.topicIds.length)] });
+    // Current-affairs topics only get questions written from verified facts, never live.
+    const syllabus = await Topic.find({ id: { $in: input.topicIds }, kind: { $ne: "current_affairs" } }).select("id").lean();
+    if (!syllabus.length) throw new HttpError(404, "No syllabus topics to generate for.", "SYLLABUS_EMPTY");
+    return pickTopicAnchor({ examId: input.examId, topicId: syllabus[Math.floor(Math.random() * syllabus.length)].id });
   }
   if (input.topicId) {
     const topic = await Topic.findOne({ id: input.topicId, examId: input.examId }).lean();
@@ -255,7 +258,7 @@ async function pickTopicAnchor(input: {
     }
     return { topic: topics[Math.floor(Math.random() * topics.length)], subject };
   }
-  const subjects = await Subject.find({ examId: input.examId }).sort({ order: 1 }).lean();
+  const subjects = await Subject.find({ examId: input.examId, kind: { $ne: "current_affairs" } }).sort({ order: 1 }).lean();
   if (!subjects.length) {
     throw new HttpError(404, "No syllabus subjects yet. Admin must discover subjects for this exam first.", "SYLLABUS_EMPTY");
   }
@@ -539,7 +542,11 @@ export async function ensurePracticeQuestions(input: {
   take(await sample({ ...exact, id: { $nin: [...seen] } }, count - picked.length));
 
   let generatedLive = 0;
-  if (picked.length < count) {
+  // A current-affairs topic serves only questions written from verified facts: no live AI fill.
+  const currentAffairsTopic = input.topicId
+    ? Boolean(await Topic.exists({ id: input.topicId, kind: "current_affairs" }))
+    : false;
+  if (picked.length < count && !currentAffairsTopic) {
     try {
       const anchor = await pickTopicAnchor({ examId: input.examId, topicId: input.topicId, topicIds: input.topicIds });
       const { docs } = await generateForStudent({

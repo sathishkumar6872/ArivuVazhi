@@ -106,6 +106,8 @@ export const Subject = mongoose.model(
       nameTa: { type: String, default: "" },
       order: { type: Number, default: 0 },
       status: { type: String, enum: ["draft", "validation", "approved", "published"], default: "draft" },
+      /** "current_affairs" rows are made by the current-affairs job, not by syllabus discovery. */
+      kind: { type: String, enum: ["syllabus", "current_affairs"], default: "syllabus" },
     },
     { timestamps: true },
   ),
@@ -123,6 +125,8 @@ export const Topic = mongoose.model(
       nameTa: { type: String, default: "" },
       order: { type: Number, default: 0 },
       status: { type: String, enum: ["draft", "validation", "approved", "published"], default: "draft" },
+      /** "current_affairs" rows are made by the current-affairs job, not by syllabus discovery. */
+      kind: { type: String, enum: ["syllabus", "current_affairs"], default: "syllabus" },
     },
     { timestamps: true },
   ),
@@ -143,7 +147,9 @@ export const Question = mongoose.model(
       difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "medium" },
       language: { type: String, enum: ["en", "ta"], default: "en" },
       /** Where it came from. student_ai / daily_mock = AI-generated for a student's practice / daily mock. */
-      source: { type: String, enum: ["admin", "ai", "pyq", "student_ai", "daily_mock"], default: "student_ai" },
+      source: { type: String, enum: ["admin", "ai", "pyq", "student_ai", "daily_mock", "current_affairs"], default: "student_ai" },
+      /** For source "current_affairs": the verified item the question was written from. */
+      currentAffairId: { type: String, default: "" },
       /**
        * The student an AI question was generated for. While `under_review` only that
        * student sees it; once published (by the AI check or an admin) it joins the
@@ -1042,6 +1048,8 @@ export const CurrentAffair = mongoose.model(
       rejectReason: { type: String, default: "" },
       reportCount: { type: Number, default: 0 },
       order: { type: Number, default: 0 },
+      /** Practice questions have been written from this item. */
+      questionsMade: { type: Boolean, default: false },
     },
     { timestamps: true },
   ),

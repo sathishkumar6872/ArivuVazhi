@@ -3,7 +3,9 @@ import { completeChatGptResponse, getChatGptStatus } from "./chatgpt-auth.js";
 import { completeGemini, getGeminiSettings } from "./gemini-settings.js";
 import { nextIstRun } from "./governance.js";
 import { dayKey, nid } from "./http.js";
-import { AiUsage, CurrentAffair, JobRun } from "./models.js";
+import { AiUsage, CurrentAffair, Exam, JobRun, Question, Subject, Topic } from "./models.js";
+import { stemKey } from "./governance.js";
+import { autoReviewQuestions } from "./question-ai.js";
 import { getOpenAiSettings } from "./openai-settings.js";
 
 /**
@@ -66,7 +68,12 @@ const TRUSTED = [
 ];
 
 /** Hosts that look like coaching, job or GK-quiz sites rather than news outlets. */
-const AGGREGATOR = /(job|naukri|sarkari|currentaffair|current-affair|gktoday|adda247|testbook|jagranjosh|byjus|unacademy|examveda|gkquiz|affairscloud|studyiq|vision|drishti|insightsonindia|wikipedia)/;
+const AGGREGATOR = /(job|naukri|sarkari|currentaffair|current-affair|gktoday|adda247|testbook|jagranjosh|byjus|unacademy|examveda|gkquiz|affairscloud|studyiq|vision|drishti|insightsonindia|wikipedia|shishya)/;
+
+/** True for coaching / job / GK aggregator links (never shown or counted as a source). */
+export function isAggregatorUrl(url: string) {
+  return AGGREGATOR.test(hostOf(url));
+}
 
 type Candidate = {
   /** Day the event happened (YYYY-MM-DD, IST). */
@@ -605,12 +612,20 @@ export async function runNightly(trigger: "schedule" | "manual") {
   } catch (error) {
     console.warn(`Current affairs job failed: ${error instanceof Error ? error.message : error}`);
   }
+  let archive: Awaited<ReturnType<typeof startCurrentAffairsArchive>> = { started: false, reason: "error" };
   try {
-    return await startCurrentAffairsArchive();
+    archive = await startCurrentAffairsArchive();
+    if (archive.started && archiveRunning) await archiveRunning;
   } catch (error) {
     console.warn(`Current affairs archive failed: ${error instanceof Error ? error.message : error}`);
-    return { started: false, reason: "error" };
   }
+  // Then practice questions from verified items that do not have them yet.
+  try {
+    await makeCurrentAffairsQuestions(QUESTION_ITEMS_PER_NIGHT);
+  } catch (error) {
+    console.warn(`Current affairs questions failed: ${error instanceof Error ? error.message : error}`);
+  }
+  return archive;
 }
 
 export function startCurrentAffairsScheduler() {
@@ -634,4 +649,157 @@ export function startCurrentAffairsScheduler() {
     }
   }, 60_000);
   catchUp.unref?.();
+}
+
+// ---------------------------------------------------------------- practice questions from verified items
+
+const QUESTION_ITEMS_PER_NIGHT = 120;
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAMES_TA = ["ஜன", "பிப்", "மார்", "ஏப்", "மே", "ஜூன்", "ஜூலை", "ஆக", "செப்", "அக்", "நவ", "டிச"];
+
+/** The exam's "Current Affairs" subject (created once, outside the syllabus refresh). */
+async function currentAffairsSubject(examId: string) {
+  const id = `ca-subject-${examId}`;
+  await Subject.updateOne(
+    { id },
+    {
+      $setOnInsert: { id, examId, name: "Current Affairs", nameEn: "Current Affairs", nameTa: "நடப்பு நிகழ்வுகள்", order: 9999 },
+      $set: { status: "published", kind: "current_affairs" },
+    },
+    { upsert: true },
+  );
+  return id;
+}
+
+/** One topic per month, newest month first ("Current Affairs · Nov 2026"). */
+async function currentAffairsTopic(examId: string, subjectId: string, month: string) {
+  const id = `ca-topic-${examId}-${month}`;
+  const [y, m] = month.split("-").map(Number);
+  await Topic.updateOne(
+    { id },
+    {
+      $setOnInsert: {
+        id,
+        examId,
+        subjectId,
+        name: `Current Affairs · ${MONTH_NAMES[m - 1]} ${y}`,
+        nameEn: `Current Affairs · ${MONTH_NAMES[m - 1]} ${y}`,
+        nameTa: `நடப்பு நிகழ்வுகள் · ${MONTH_NAMES_TA[m - 1]} ${y}`,
+        order: 999999 - (y * 100 + m),
+      },
+      $set: { status: "published", kind: "current_affairs" },
+    },
+    { upsert: true },
+  );
+  return id;
+}
+
+type Mcq = { stem: string; options: Array<{ key: string; text: string }>; correctKey: string; explanation: string };
+
+function readMcq(value: unknown): Mcq | null {
+  const row = (value || {}) as Record<string, unknown>;
+  const options = (Array.isArray(row.options) ? row.options : [])
+    .map((option, index) => {
+      const o = (option || {}) as Record<string, unknown>;
+      return { key: str(o.key, 2).toUpperCase() || "ABCD"[index], text: str(o.text, 200) };
+    })
+    .filter((option) => option.text);
+  const correctKey = str(row.correctKey, 2).toUpperCase();
+  const mcq = { stem: str(row.stem, 500), options, correctKey, explanation: str(row.explanation, 600) };
+  const ok = mcq.stem.length >= 8 && mcq.explanation.length >= 8 && options.length === 4 &&
+    options.every((option, i) => option.key === "ABCD"[i]) && "ABCD".includes(correctKey) && correctKey;
+  return ok ? mcq : null;
+}
+
+const LEVELS = ["easy", "medium", "hard"] as const;
+
+/** Easy / medium / hard MCQs in English and Tamil, from the item's verified facts only. */
+async function writeQuestions(item: { facts: string[]; en?: { title?: string } | null }) {
+  const system =
+    "You write exam MCQs for Tamil Nadu government exam students (TNPSC). Use ONLY the verified facts given; " +
+    "never add a new fact, number, name or date. Each question tests one fact, has exactly one correct option and " +
+    "three plausible wrong options. Return ONLY valid JSON.";
+  const user = `Verified facts:
+${item.facts.map((fact) => `- ${fact}`).join("\n")}
+Topic: ${item.en?.title || ""}
+
+Write three MCQs: "easy" (direct recall), "medium" (needs one detail), "hard" (needs combining two facts or a precise figure).
+Give each in English ("en") and in Tamil script ("ta"); the Tamil one is the same question, translated.
+JSON shape: {"easy":{"en":{"stem":"","options":[{"key":"A","text":""},{"key":"B","text":""},{"key":"C","text":""},{"key":"D","text":""}],"correctKey":"A","explanation":""},"ta":{...}},"medium":{...},"hard":{...}}`;
+  const parsed = extractJson(await chatgpt(system, user, false)) as Record<string, Record<string, unknown>>;
+  const out: Array<{ level: (typeof LEVELS)[number]; language: "en" | "ta"; mcq: Mcq }> = [];
+  for (const level of LEVELS) {
+    for (const language of ["en", "ta"] as const) {
+      const mcq = readMcq(parsed?.[level]?.[language]);
+      if (mcq) out.push({ level, language, mcq });
+    }
+  }
+  return out;
+}
+
+let questionsRunning = false;
+
+/**
+ * Write practice questions for verified items that have none yet, for every published exam,
+ * under that exam's "Current Affairs" subject (one topic per month). The existing AI answer
+ * check then publishes the ones that pass.
+ */
+export async function makeCurrentAffairsQuestions(limit = QUESTION_ITEMS_PER_NIGHT) {
+  if (questionsRunning) return { items: 0, questions: 0, reason: "already_running" };
+  questionsRunning = true;
+  let made = 0;
+  let itemsDone = 0;
+  try {
+    const exams = await Exam.find({ lifecycle: "published" }).select("id pattern").lean();
+    if (!exams.length) return { items: 0, questions: 0 };
+    const subjects = new Map<string, string>();
+    for (const exam of exams) subjects.set(exam.id, await currentAffairsSubject(exam.id));
+    const items = await CurrentAffair.find({ status: "published", questionsMade: { $ne: true } })
+      .sort({ newsDay: -1 })
+      .limit(limit)
+      .lean();
+    for (const item of items) {
+      let written: Awaited<ReturnType<typeof writeQuestions>> = [];
+      try {
+        written = await writeQuestions(item);
+      } catch (error) {
+        console.warn(`Current affairs questions for ${item.id} failed: ${error instanceof Error ? error.message : error}`);
+        continue;
+      }
+      const docs = [];
+      for (const exam of exams) {
+        const topicId = await currentAffairsTopic(exam.id, subjects.get(exam.id)!, item.newsDay.slice(0, 7));
+        for (const { level, language, mcq } of written) {
+          docs.push({
+            id: nid(),
+            examId: exam.id,
+            subjectId: subjects.get(exam.id)!,
+            topicId,
+            ...mcq,
+            difficulty: level,
+            language,
+            source: "current_affairs",
+            currentAffairId: item.id,
+            ownerStudentId: "",
+            stemKey: stemKey(mcq.stem),
+            status: "under_review",
+            rightsStatus: "not_applicable",
+            marks: exam.pattern?.marksPerQuestion || 1.5,
+          });
+        }
+      }
+      if (docs.length) {
+        await Question.insertMany(docs);
+        // Same answer check as other AI questions; passing ones join the shared pool.
+        await autoReviewQuestions(docs.map((doc) => doc.id));
+        made += docs.length;
+      }
+      await CurrentAffair.updateOne({ id: item.id }, { $set: { questionsMade: true } });
+      itemsDone += 1;
+    }
+  } finally {
+    questionsRunning = false;
+  }
+  console.log(JSON.stringify({ job: "current_affairs_questions", items: itemsDone, questions: made }));
+  return { items: itemsDone, questions: made };
 }

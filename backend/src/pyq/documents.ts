@@ -143,7 +143,7 @@ export async function addLinkOnly(input: SessionInfo & { docType: "question_pape
 
 async function syllabusText(examId: string) {
   const [subjects, topics] = await Promise.all([
-    Subject.find({ examId, status: { $ne: "draft" } }).sort({ order: 1 }).lean(),
+    Subject.find({ examId, status: { $ne: "draft" }, kind: { $ne: "current_affairs" } }).sort({ order: 1 }).lean(),
     Topic.find({ examId, status: { $ne: "draft" } }).sort({ order: 1 }).lean(),
   ]);
   const text = subjects
