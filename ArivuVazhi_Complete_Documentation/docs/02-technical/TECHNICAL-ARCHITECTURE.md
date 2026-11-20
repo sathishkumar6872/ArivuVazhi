@@ -1,7 +1,7 @@
 # ArivuVazhi — Technical Architecture, Security & Data
 
 **Document version:** 2.0  
-**Last updated:** 05 November 2026
+**Last updated:** 20 November 2026
 
 ## 1. Approved architecture
 
@@ -11,7 +11,7 @@ Use a modular monolith for Release 1. One Node.js backend hosts business modules
 |---|---|
 | Admin Portal | Next.js App Router + TypeScript + MUI |
 | Student Web | Next.js App Router + TypeScript + MUI |
-| Student Mobile | React Native + TypeScript; Android first |
+| Student Mobile | Flutter (Dart); Android first (changed from React Native on 17 Nov 2026) |
 | Backend | Node.js + Express.js + TypeScript |
 | AI | Backend module; OpenAI API provider + Ollama for local development/experimentation |
 | Database | MongoDB Atlas Free Tier initially |
@@ -43,7 +43,8 @@ Use a modular monolith for Release 1. One Node.js backend hosts business modules
 8. **AI Tutor:** provider adapter, prompt versions, retrieval, conversation, feedback, memory and usage.
 9. **Study Planner & Analytics:** goals, tasks, progress aggregation and readiness indicators.
 10. **Notifications & Support:** in-app/push/email integration when configured; tickets and feedback.
-11. **Admin Operations:** work queue, approval, bulk actions, config versions, audit and cost reporting.
+11. **Current Affairs:** daily collection, three-check verification, archive backfill, student feed and filters, practice question generation (`backend/src/current-affairs.ts`).
+12. **Admin Operations:** work queue, approval, bulk actions, config versions, audit and cost reporting.
 
 ## 4. Data design principles
 
@@ -83,6 +84,19 @@ Use a modular monolith for Release 1. One Node.js backend hosts business modules
 - Central structured logs, request IDs, error monitoring and operational alerts.
 - Provisional recovery objectives: RPO 24 hours and RTO 8 hours, subject to provider validation and restore drills.
 - Verify free-tier backups, exports, restore paths, quotas and retention before launch.
+
+### 7.1 Scheduled jobs
+
+| Job | When | Trigger on a sleeping host |
+|---|---|---|
+| Daily mock sets | 02:00 IST (in-process) + boot catch-up | `POST /api/v1/internal/jobs/daily-mocks` at 02:55 |
+| Current affairs: feed, then archive (2 months), then practice questions (120 items) | 03:00 IST (in-process); boot catch-up runs the feed only | `POST /api/v1/internal/jobs/current-affairs` at 03:00 |
+
+Internal routes need `x-cron-secret` equal to `CRON_SECRET` and return 404 when it is unset. Runs are recorded in `JobRun` (`daily_mock_sets`, `current_affairs`, `current_affairs_month`); a published day or a done month is never redone, and a run already in progress on another instance is not started twice.
+
+### 7.2 Secrets that must match across environments
+
+`ENCRYPTION_KEY` encrypts ChatGPT tokens and storage credentials in the database. A local backend that shares the production database must use the same key, or tokens written by one cannot be decrypted by the other.
 
 ## 8. API conventions
 

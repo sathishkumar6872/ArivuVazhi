@@ -1,7 +1,7 @@
 # ArivuVazhi — Development Roadmap, QA & Release Gates
 
 **Document version:** 2.0  
-**Last updated:** 05 November 2026
+**Last updated:** 20 November 2026
 
 ## 1. Delivery approach
 
@@ -36,7 +36,14 @@ Build incrementally in separate repositories, with API contracts and testable ve
 
 Earlier planning estimate: approximately **1,800–2,600 engineering hours**, or roughly **12–18 months for one developer working 30–40 hours per week**. This is a planning range only; it depends heavily on first-exam scope, content preparation, integrations, QA and available weekly time.
 
-## 5. Validation before public launch
+## 5. Status on 20 November 2026
+
+- The learner journey works end to end on the Flutter app against the hosted API (login, home, exams, practice with levels, daily mock, AI tutor, current affairs, planner, profile, logout), checked on an Android emulator.
+- Pending before relying on scheduled work: configure `CRON_SECRET` on the host and the two cron calls (02:55 and 03:00 IST).
+- Pending deploy: current-affairs practice questions and the shishya.in block.
+- Release signing: the APK is debug-signed; set up the release keystore before store distribution.
+
+## 6. Validation before public launch
 
 - Select first exam and confirm official syllabus/pattern source.
 - Confirm PYQ and third-party content rights.
@@ -44,7 +51,9 @@ Earlier planning estimate: approximately **1,800–2,600 engineering hours**, or
 - Verify current hosting/database/AI provider pricing and limits.
 - Run Tamil/English AI quality and safety evaluation.
 - Complete backup/restore, incident response and support workflows.
+- Spot-check AI-published current affairs and current-affairs questions for accuracy.
+- Decide ChatGPT plan sign-in vs. an OpenAI API key for production AI.
 
-## 6. Change control
+## 7. Change control
 
 Any change to approved Release 1 scope or technology must be recorded with the reason, impact on cost/security/timeline, migration implications and explicit approval. Update the decision register and affected documents together.

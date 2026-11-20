@@ -2,7 +2,7 @@
 
 **Document version:** 2.0  
 **Status:** Approved product direction and Release 1 scope  
-**Last updated:** 05 November 2026
+**Last updated:** 20 November 2026
 
 ## 1. Purpose
 
@@ -38,6 +38,7 @@ ArivuVazhi is an AI-assisted government-exam preparation platform for Tamil- and
 - Study planner, configurable carry-forward, analytics/readiness estimate, personal achievements, bookmarks and notes.
 - In-app notifications, support tickets and offline practice with later sync.
 - AI learning memory that the student can view, correct, reset or disable; searchable conversation history.
+- Daily current affairs (added 20 Nov 2026): yesterday's exam-relevant news every morning in English and Tamil, verified by three independent checks before publishing, with source links, "Report wrong", an 18-month archive, date / range / category filters, a quick quiz and current-affairs practice questions.
 
 ### 4.2 Admin Portal capabilities
 

@@ -2,7 +2,7 @@
 
 **Documentation version:** 2.0  
 **Project name:** ArivuVazhi  
-**Last updated:** 05 November 2026
+**Last updated:** 20 November 2026
 
 > The product name is **ArivuVazhi**. “2.0” is not part of the product name; it refers only to an earlier documentation/version label.
 
@@ -19,6 +19,10 @@ This repository contains the current consolidated product and engineering baseli
 5. [Development Roadmap, QA & Release Gates](docs/04-delivery/ROADMAP-AND-QA.md)
 6. [Decision Register](docs/04-delivery/DECISION-REGISTER.md)
 
+## Recent changes
+
+The 20 November 2026 changes (Flutter app, mobile design system, AI provider fallbacks, daily verified current affairs with archive and practice questions, admin Today page) are recorded in the [Decision Register](docs/04-delivery/DECISION-REGISTER.md). Setup and cron steps are in the repository [README](../README.md).
+
 ## Prototypes
 
 - `prototypes/admin-portal/index.html`
@@ -31,7 +35,7 @@ This repository contains the current consolidated product and engineering baseli
 |---|---|
 | Admin Portal | Next.js App Router, TypeScript, MUI |
 | Student Web | Next.js App Router, TypeScript, MUI |
-| Student Mobile | React Native, TypeScript; Android first |
+| Student Mobile | Flutter (Dart); Android first. Replaced React Native on 17 Nov 2026 |
 | Backend | Node.js, Express.js, TypeScript |
 | AI | Node backend module; OpenAI API, Ollama for local experimentation |
 | Database | MongoDB Atlas Free Tier initially |
