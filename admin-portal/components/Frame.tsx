@@ -10,7 +10,7 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 export { PageSkeleton } from "@/components/PageSkeleton";
 
 const links = [
-  ["/overview", "Overview"],
+  ["/overview", "Today"],
   ["/students", "Students"],
   ["/exams", "Examinations"],
   ["/syllabus", "Syllabus history"],
@@ -46,7 +46,7 @@ export function AdminFrame({ children }: { children: React.ReactNode }) {
     localStorage.removeItem("av_admin_refresh");
     router.push("/login");
   }
-  const current = links.find(([href]) => pathname.startsWith(href))?.[1] || "Overview";
+  const current = links.find(([href]) => pathname.startsWith(href))?.[1] || "Today";
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#F3F4F6" }}>
       <Box sx={{ display: { xs: "none", md: "flex" }, flexDirection: "column", position: "fixed", width: 248, inset: "0 auto 0 0", bgcolor: "#0B3D2E", color: "white", p: 2, overflow: "auto" }}>

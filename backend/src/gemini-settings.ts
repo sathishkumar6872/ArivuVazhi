@@ -142,6 +142,8 @@ async function generateOnce(input: {
   timeoutMs?: number;
   /** Ask the model to skip "thinking" for a quicker reply (fast mode). */
   noThinking?: boolean;
+  /** Ground the answer with Google Search (fact checks). */
+  search?: boolean;
 }): Promise<string> {
   if (input.noThinking && !thinkingConfigRejected.has(input.model)) {
     try {
@@ -167,6 +169,7 @@ async function generateRequest(input: {
   image?: { mimeType: string; base64: string };
   timeoutMs?: number;
   thinkingOff: boolean;
+  search?: boolean;
 }): Promise<string> {
   const parts: Array<Record<string, unknown>> = [{ text: input.user }];
   if (input.image) {
@@ -190,6 +193,7 @@ async function generateRequest(input: {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: input.system }] },
         contents: [{ role: "user", parts }],
+        ...(input.search ? { tools: [{ google_search: {} }] } : {}),
         generationConfig: {
           temperature: 0.2,
           ...(input.thinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
@@ -234,6 +238,8 @@ export async function completeGemini(input: {
   image?: { mimeType: string; base64: string };
   /** Tutor chat: skip thinking, cap each model attempt and the whole call so a busy model cannot stall the reply. */
   fast?: boolean;
+  /** Ground the answer with Google Search (used to fact-check current affairs). */
+  search?: boolean;
 }): Promise<string | null> {
   const current = await getGeminiSettings();
   const key = (input.apiKey || current.apiKey).trim();
@@ -262,6 +268,7 @@ export async function completeGemini(input: {
         image: input.image,
         timeoutMs: input.fast ? Math.min(FAST_ATTEMPT_MS, remaining) : undefined,
         noThinking: input.fast,
+        search: input.search,
       });
       await AppConfig.updateOne(
         { id: "app" },

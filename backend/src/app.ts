@@ -14,6 +14,7 @@ import { studentRouter } from "./routes/student.js";
 import { learningRouter } from "./routes/learning.js";
 import { adminRouter } from "./routes/admin.js";
 import { getDailyMockRun, startDailyMockJob } from "./jobs.js";
+import { startCurrentAffairsJob } from "./current-affairs.js";
 import { filesRouter, storageAdminRouter } from "./routes/storage.js";
 import { pyqAdminRouter } from "./routes/pyq-admin.js";
 import { completeGoogleAuth } from "./storage/index.js";
@@ -99,6 +100,15 @@ export function createApp() {
         return res.status(202).json({ data: { started: true, runId: start.runId, statusUrl: `/api/v1/internal/jobs/daily-mocks/${start.runId}` } });
       }
       res.status(200).json({ data: { started: false, reason: start.reason, runId: start.runId } });
+    } catch (error) {
+      next(error);
+    }
+  });
+  // Daily current affairs for yesterday's news (call at 03:00 IST). Safe to call again: skips a published day.
+  app.post("/api/v1/internal/jobs/current-affairs", cronOnly, async (_req, res, next) => {
+    try {
+      const start = await startCurrentAffairsJob("manual");
+      res.status(start.started ? 202 : 200).json({ data: start });
     } catch (error) {
       next(error);
     }

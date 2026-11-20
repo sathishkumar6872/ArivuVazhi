@@ -5,6 +5,7 @@ import '../core/app_state.dart';
 import '../core/nav.dart';
 import '../core/reminders.dart';
 import '../widgets/ui.dart';
+import 'current_affairs_screens.dart';
 
 /// One planner task row with a tick circle.
 class _TaskRow extends StatelessWidget {
@@ -52,10 +53,13 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
   Map<String, dynamic>? data;
   List<dynamic> mocks = [];
   String error = '';
+  Map<String, dynamic>? affairs;
 
   @override
   void initState() {
     super.initState();
+    // Optional: the home screen still loads if current affairs fail.
+    api('/current-affairs').then((value) => safe(() => affairs = asMap(value))).catchError((_) {});
     Future.wait([api('/dashboard'), api('/mocks')]).then((results) {
       safe(() {
         data = asMap(results[0]);
@@ -191,6 +195,8 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
             ]),
           ),
         ),
+        if (asList(affairs?['items']).isNotEmpty)
+          CurrentAffairsCard(day: str(affairs!['day']), count: asList(affairs!['items']).length, go: go),
         if (resume != null)
           AppCard(
             onPress: () => go(AppRoute('mockRun', {'mockId': resume['id']})),

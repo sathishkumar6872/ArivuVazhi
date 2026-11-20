@@ -4,11 +4,13 @@ import { connectDb } from "./db.js";
 import { createApp } from "./app.js";
 import { backfillMockQuestionSources, backfillSeen, backfillStemKeys, startDailyMockScheduler } from "./jobs.js";
 import { failStaleJobs } from "./pyq/discovery.js";
+import { startCurrentAffairsScheduler } from "./current-affairs.js";
 
 const app = createApp();
 
 await connectDb();
 startDailyMockScheduler();
+startCurrentAffairsScheduler();
 void backfillStemKeys()
   .then((count) => count && console.log(`Backfilled stemKey on ${count} questions.`))
   .catch((error) => console.warn(`stemKey backfill failed: ${error?.message || error}`));

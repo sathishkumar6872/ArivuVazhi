@@ -9,6 +9,7 @@ import 'screens/account_screens.dart';
 import 'screens/auth_screens.dart';
 import 'screens/home_screens.dart';
 import 'screens/learn_screens.dart';
+import 'screens/current_affairs_screens.dart';
 import 'screens/tutor_screens.dart';
 import 'widgets/ui.dart';
 
@@ -323,6 +324,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         return AchievementsScreen(user: user, back: back);
       case 'support':
         return SupportScreen(back: back);
+      case 'currentAffairs':
+        return CurrentAffairsScreen(back: back, go: push);
+      case 'currentAffairsQuiz':
+        return CurrentAffairsQuizScreen(route: r, back: back);
     }
     return const SizedBox.shrink();
   }
@@ -330,7 +335,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final current = route;
-    final fullScreen = current.name == 'chat' || current.name == 'quiz' || current.name == 'mockRun';
+    final fullScreen = current.name == 'chat' || current.name == 'quiz' || current.name == 'mockRun' || current.name == 'currentAffairsQuiz';
     return PopScope(
       // The app handles every Android back itself (see _systemBack), so it never closes by accident.
       canPop: false,

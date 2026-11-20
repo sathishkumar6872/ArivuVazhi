@@ -2,12 +2,13 @@ import mongoose from "mongoose";
 import { Router } from "express";
 import { z } from "zod";
 import { audit, requireAuth, requireRole } from "../auth.js";
-import { HttpError, nid, pageQuery, sendList, wrap } from "../http.js";
+import { HttpError, dayKey, nid, pageQuery, sendList, wrap } from "../http.js";
 import {
   AiUsage,
   AppConfig,
   AppFeedback,
   AuditLog,
+  DailyMockSet,
   Exam,
   KnowledgeSource,
   MockTest,
@@ -36,6 +37,7 @@ import { getGeminiSettings, testGeminiConnection } from "../gemini-settings.js";
 import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
 import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
+import { currentAffairsStatus, startCurrentAffairsJob } from "../current-affairs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
 
 export const adminRouter = Router();
@@ -63,13 +65,32 @@ adminRouter.get(
       Ticket.countDocuments({ status: { $in: ["open", "in_progress"] } }),
       AiUsage.aggregate([{ $group: { _id: null, tokens: { $sum: "$tokens" }, inr: { $sum: "$estimatedInr" }, requests: { $sum: 1 } } }]),
     ]);
-    const recentStudents = await User.find({ role: "student" }).sort({ updatedAt: -1 }).limit(5).select("firstName lastName email lastActiveDate status").lean();
+    const [recentStudents, mockSets, flaggedQuestions, settings, currentAffairs] = await Promise.all([
+      User.find({ role: "student" }).sort({ updatedAt: -1 }).limit(5).select("firstName lastName email lastActiveDate status").lean(),
+      // Today's personal daily mock sets, by status (ready / generating / failed).
+      DailyMockSet.aggregate<{ _id: string; count: number }>([
+        { $match: { dayKey: dayKey() } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+      Question.countDocuments({ flagged: true }),
+      AppConfig.findOne({ id: "app" }).select("aiProvider tutorLastError tutorLastErrorAt").lean(),
+      currentAffairsStatus(),
+    ]);
+    const mocks = Object.fromEntries(mockSets.map((row) => [row._id, row.count]));
     res.json({
       data: {
         students,
         publishedQuestions: questions,
         awaitingApproval: pendingQuestions + pendingTopics,
         openTickets,
+        flaggedQuestions,
+        mocksToday: { ready: mocks.ready || 0, generating: mocks.generating || 0, failed: mocks.failed || 0 },
+        aiStatus: {
+          provider: settings?.aiProvider || "local",
+          lastError: settings?.tutorLastError || "",
+          lastErrorAt: settings?.tutorLastErrorAt || null,
+        },
+        currentAffairs,
         ai: usage[0] || { tokens: 0, inr: 0, requests: 0 },
         recentStudents,
       },
@@ -1184,6 +1205,15 @@ adminRouter.post(
     void start.done.catch((error) => console.warn(`Daily mock job failed: ${error?.message || error}`));
     await audit(req.user!.id, "job_trigger", "job", "daily_mock_sets");
     res.status(202).json({ data: { started: true, runId: start.runId } });
+  }),
+);
+
+adminRouter.post(
+  "/jobs/current-affairs",
+  wrap(async (req, res) => {
+    const start = await startCurrentAffairsJob("manual");
+    if (start.started) await audit(req.user!.id, "job_trigger", "job", "current_affairs");
+    res.status(start.started ? 202 : 200).json({ data: start });
   }),
 );
 

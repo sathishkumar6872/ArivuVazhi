@@ -1002,3 +1002,59 @@ export const PyqJob = mongoose.model(
     { timestamps: true },
   ),
 );
+
+/**
+ * One daily current-affairs item. Collected by AI at 03:00 IST for the previous day,
+ * then fact-checked independently (source links, Gemini + Google Search, ChatGPT re-check).
+ * Only items that pass every check are published to students.
+ */
+const currentAffairText = new Schema(
+  {
+    title: { type: String, default: "" },
+    points: { type: [String], default: [] },
+    quiz: {
+      stem: { type: String, default: "" },
+      options: { type: [{ key: String, text: String }], default: [] },
+      correctKey: { type: String, default: "" },
+      explanation: { type: String, default: "" },
+    },
+  },
+  { _id: false },
+);
+
+export const CurrentAffair = mongoose.model(
+  "CurrentAffair",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      /** The day the news happened (IST). */
+      newsDay: { type: String, required: true, index: true },
+      category: { type: String, default: "national" },
+      facts: { type: [String], default: [] },
+      sources: { type: [{ title: String, url: String }], default: [] },
+      en: { type: currentAffairText, default: () => ({}) },
+      ta: { type: currentAffairText, default: () => ({}) },
+      status: { type: String, enum: ["checking", "published", "rejected", "hidden"], default: "checking", index: true },
+      /** Every validation step and its outcome, for the admin summary. */
+      checks: { type: [{ step: String, passed: Boolean, note: String }], default: [] },
+      rejectReason: { type: String, default: "" },
+      reportCount: { type: Number, default: 0 },
+      order: { type: Number, default: 0 },
+    },
+    { timestamps: true },
+  ),
+);
+
+/** A student's "this is wrong" report on a current-affairs item (one per student per item). */
+export const CurrentAffairReport = mongoose.model(
+  "CurrentAffairReport",
+  new Schema(
+    {
+      id: { type: String, required: true, unique: true },
+      itemId: { type: String, required: true },
+      studentId: { type: String, required: true },
+    },
+    { timestamps: true },
+  ),
+);
+CurrentAffairReport.schema.index({ itemId: 1, studentId: 1 }, { unique: true });

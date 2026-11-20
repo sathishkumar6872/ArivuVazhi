@@ -17,6 +17,8 @@ import {
   AppConfig,
   Conversation,
   DailyMockSet,
+  CurrentAffair,
+  CurrentAffairReport,
   Exam,
   MemoryItem,
   MockAttempt,
@@ -320,6 +322,55 @@ learningRouter.post(
     const updated = await Question.findOneAndUpdate({ id: question.id }, { $inc: { reportCount: 1 } }, { new: true }).lean();
     if (updated && !updated.flagged && (updated.reportCount || 0) >= REPORTS_TO_HIDE) {
       await Question.updateOne({ id: question.id }, { $set: { flagged: true, flagReason: `${updated.reportCount} student reports` } });
+    }
+    res.status(201).json({ data: { reported: true, alreadyReported: false } });
+  }),
+);
+
+/** Reports on one current-affairs item before it is hidden from everyone. */
+const CA_REPORTS_TO_HIDE = 2;
+
+/** Latest published day of current affairs (or ?day=YYYY-MM-DD), in the student's exam language. */
+learningRouter.get(
+  "/current-affairs",
+  wrap(async (req, res) => {
+    studentId(req);
+    const asked = typeof req.query.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day) ? req.query.day : "";
+    const days = (await CurrentAffair.distinct("newsDay", { status: "published" })).sort().reverse().slice(0, 14) as string[];
+    const day = asked && days.includes(asked) ? asked : days[0] || "";
+    if (!day) return res.json({ data: { day: "", days: [], items: [] } });
+    const lang = req.user!.language === "ta" ? "ta" : "en";
+    const rows = await CurrentAffair.find({ newsDay: day, status: "published" }).sort({ order: 1 }).lean();
+    const items = rows.map((row) => {
+      const text = lang === "ta" && row.ta?.title ? row.ta : row.en;
+      return {
+        id: row.id,
+        category: row.category,
+        title: text?.title || "",
+        points: text?.points || [],
+        quiz: text?.quiz || null,
+        sources: (row.sources || []).map((source) => ({ title: source.title || "", url: source.url || "" })),
+      };
+    });
+    res.json({ data: { day, days, items } });
+  }),
+);
+
+learningRouter.post(
+  "/current-affairs/:id/report",
+  wrap(async (req, res) => {
+    const me = studentId(req);
+    const item = await CurrentAffair.findOne({ id: req.params.id, status: "published" }).select("id").lean();
+    if (!item) throw new HttpError(404, "Item not found", "NOT_FOUND");
+    try {
+      await CurrentAffairReport.create({ id: nid(), itemId: item.id, studentId: me });
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return res.json({ data: { reported: true, alreadyReported: true } });
+      throw error;
+    }
+    const updated = await CurrentAffair.findOneAndUpdate({ id: item.id }, { $inc: { reportCount: 1 } }, { new: true }).lean();
+    if (updated && (updated.reportCount || 0) >= CA_REPORTS_TO_HIDE) {
+      await CurrentAffair.updateOne({ id: item.id }, { $set: { status: "hidden" } });
     }
     res.status(201).json({ data: { reported: true, alreadyReported: false } });
   }),
