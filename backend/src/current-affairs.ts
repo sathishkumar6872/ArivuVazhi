@@ -718,7 +718,9 @@ async function writeQuestions(item: { facts: string[]; en?: { title?: string } |
   const system =
     "You write exam MCQs for Tamil Nadu government exam students (TNPSC). Use ONLY the verified facts given; " +
     "never add a new fact, number, name or date. Each question tests one fact, has exactly one correct option and " +
-    "three plausible wrong options. Return ONLY valid JSON.";
+    "three plausible wrong options. Every question must stand alone: the student sees it without the facts or the topic, " +
+    "so name the scheme, body, place, person or event in the question itself (never 'this scheme', 'the approval', " +
+    "'இந்த திட்டம்'). Return ONLY valid JSON.";
   const user = `Verified facts:
 ${item.facts.map((fact) => `- ${fact}`).join("\n")}
 Topic: ${item.en?.title || ""}
