@@ -341,6 +341,11 @@ export async function startCurrentAffairsJob(trigger: "schedule" | "boot" | "man
   if (running) return { started: false, reason: "already_running" };
   const newsDay = shiftDay(dayKey(), -1);
   if (await CurrentAffair.exists({ newsDay, status: "published" })) return { started: false, reason: "already_published" };
+  // Another instance (or a restarted process) may be running it right now.
+  const recent = new Date(Date.now() - 30 * 60 * 1000);
+  if (await JobRun.exists({ job: JOB, dayKey: newsDay, status: "running", createdAt: { $gte: recent } })) {
+    return { started: false, reason: "already_running" };
+  }
   const run = await JobRun.create({ id: nid(), job: JOB, dayKey: newsDay, trigger });
   running = execute(run, newsDay)
     .catch((error) => console.warn(`Current affairs job failed: ${error instanceof Error ? error.message : error}`))
