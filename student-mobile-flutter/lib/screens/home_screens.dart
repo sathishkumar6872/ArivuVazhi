@@ -54,10 +54,22 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
   List<dynamic> mocks = [];
   String error = '';
   Map<String, dynamic>? affairs;
+  bool slow = false; // the free-tier server can take ~1 min to wake up
 
   @override
   void initState() {
     super.initState();
+    load();
+  }
+
+  void load() {
+    safe(() {
+      error = '';
+      slow = false;
+    });
+    Future.delayed(const Duration(seconds: 8), () {
+      if (data == null && error.isEmpty) safe(() => slow = true);
+    });
     // Optional: the home screen still loads if current affairs fail.
     api('/current-affairs').then((value) => safe(() => affairs = asMap(value))).catchError((_) {});
     Future.wait([api('/dashboard'), api('/mocks')]).then((results) {
@@ -134,7 +146,12 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
           ),
         ]),
       ),
-      if (error.isNotEmpty) AppBanner(message: error),
+      if (error.isNotEmpty) ...[
+        AppBanner(message: error),
+        AppButton(label: 'Try again', tone: Tone.outline, onPress: load),
+      ],
+      if (!ready && error.isEmpty && slow)
+        const AppBanner(message: 'Server is waking up, this can take up to a minute…', tone: BannerTone.info),
       if (!ready && error.isEmpty) const Loading(variant: LoadingVariant.home),
       if (ready) ...[
         HeroCard(

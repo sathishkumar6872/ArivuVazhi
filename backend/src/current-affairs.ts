@@ -333,6 +333,7 @@ Title idea: ${item.title}
 
 Write the same content twice: "en" in clear simple English and "ta" in Tamil script (தமிழ்).
 Each has: title (one line), points (3 short exam-focused points), quiz (one MCQ testing one of the facts: stem, options A-D, correctKey, one-line explanation).
+The quiz is shown on its own, so its stem must name the scheme, body, place, person or event (never "the approved works" or "இந்த திட்டம்").
 JSON shape: {"en":{"title":"","points":[""],"quiz":{"stem":"","options":[{"key":"A","text":""},{"key":"B","text":""},{"key":"C","text":""},{"key":"D","text":""}],"correctKey":"A","explanation":""}},"ta":{...same...}}`;
   const parsed = extractJson(await chatgpt(system, user, false)) as { en?: unknown; ta?: unknown };
   const en = readWritten(parsed.en);
