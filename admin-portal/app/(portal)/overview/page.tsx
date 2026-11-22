@@ -21,7 +21,16 @@ type Overview = {
     running: boolean;
     lastRun: { newsDay: string; status: string; error: string } | null;
     archive?: { monthsDone: number; monthsTotal: number; running: boolean };
+    reports?: Array<{ itemId: string; title: string; newsDay: string; itemStatus: string; reason: string; note: string }>;
   };
+};
+
+const REPORT_REASON: Record<string, string> = {
+  wrong_fact: "Wrong fact / number",
+  wrong_date: "Wrong date",
+  wrong_source: "Source does not match",
+  translation: "Tamil / English mistake",
+  other: "Other",
 };
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -165,6 +174,21 @@ export default function OverviewPage() {
               label={`Archive (last ${ca.archive.monthsTotal} months)${ca.archive.running ? " · running" : ""}`}
               value={`${ca.archive.monthsDone}/${ca.archive.monthsTotal}`}
             />
+          ) : null}
+          {ca?.reports?.length ? (
+            <Box>
+              <Typography fontSize={13} fontWeight={700} sx={{ mb: 0.5 }}>Student reports (last 14 days)</Typography>
+              {ca.reports.map((report, index) => (
+                <Box key={`${report.itemId}-${index}`} sx={{ py: 0.75, borderTop: 1, borderColor: "divider" }}>
+                  <Typography fontSize={13} fontWeight={600}>
+                    {report.title || report.itemId} · {report.newsDay}
+                    {report.itemStatus === "hidden" ? " · hidden" : ""}
+                  </Typography>
+                  <Typography fontSize={12} color="error.main">{REPORT_REASON[report.reason] || report.reason}</Typography>
+                  <Typography fontSize={12} color="text.secondary" sx={{ wordBreak: "break-word" }}>{report.note}</Typography>
+                </Box>
+              ))}
+            </Box>
           ) : null}
           {caFailed && ca?.lastRun?.error ? (
             <Typography fontSize={13} color="error.main" sx={{ wordBreak: "break-word" }}>{ca.lastRun.error}</Typography>

@@ -387,10 +387,18 @@ learningRouter.post(
   "/current-affairs/:id/report",
   wrap(async (req, res) => {
     const me = studentId(req);
+    // A report must say what is wrong, so the admin can check it.
+    const parsed = z
+      .object({
+        reason: z.enum(["wrong_fact", "wrong_date", "wrong_source", "translation", "other"]),
+        note: z.string().trim().min(10, "Please say what is wrong (at least 10 characters).").max(500),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message || "Reason and details are required", "VALIDATION_ERROR");
     const item = await CurrentAffair.findOne({ id: req.params.id, status: "published" }).select("id").lean();
     if (!item) throw new HttpError(404, "Item not found", "NOT_FOUND");
     try {
-      await CurrentAffairReport.create({ id: nid(), itemId: item.id, studentId: me });
+      await CurrentAffairReport.create({ id: nid(), itemId: item.id, studentId: me, ...parsed.data });
     } catch (error) {
       if ((error as { code?: number }).code === 11000) return res.json({ data: { reported: true, alreadyReported: true } });
       throw error;

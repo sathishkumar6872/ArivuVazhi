@@ -3,7 +3,7 @@ import { completeChatGptResponse, getChatGptStatus } from "./chatgpt-auth.js";
 import { completeGemini, getGeminiSettings } from "./gemini-settings.js";
 import { nextIstRun } from "./governance.js";
 import { dayKey, nid } from "./http.js";
-import { AiUsage, CurrentAffair, Exam, JobRun, Question, Subject, Topic } from "./models.js";
+import { AiUsage, CurrentAffair, CurrentAffairReport, Exam, JobRun, Question, Subject, Topic } from "./models.js";
 import { stemKey } from "./governance.js";
 import { autoReviewQuestions } from "./question-ai.js";
 import { getOpenAiSettings } from "./openai-settings.js";
@@ -585,10 +585,25 @@ export async function previewCurrentAffairs(limit = 3, skipGemini = false) {
 /** Latest run and today's counts, for the admin Today page. */
 export async function currentAffairsStatus() {
   const newsDay = shiftDay(dayKey(), -1);
-  const [last, counts] = await Promise.all([
+  const [last, counts, reportRows] = await Promise.all([
     JobRun.findOne({ job: JOB }).sort({ createdAt: -1 }).select("dayKey status error ready failed finishedAt createdAt").lean(),
     CurrentAffair.aggregate<{ _id: string; n: number }>([{ $match: { newsDay } }, { $group: { _id: "$status", n: { $sum: 1 } } }]),
+    CurrentAffairReport.find({ createdAt: { $gte: new Date(Date.now() - 14 * 86_400_000) } }).sort({ createdAt: -1 }).limit(10).lean(),
   ]);
+  const reported = await CurrentAffair.find({ id: { $in: reportRows.map((row) => row.itemId) } }).select("id newsDay status en").lean();
+  const byId = new Map(reported.map((item) => [item.id, item]));
+  const reports = reportRows.map((row) => {
+    const item = byId.get(row.itemId);
+    return {
+      itemId: row.itemId,
+      title: item?.en?.title || "",
+      newsDay: item?.newsDay || "",
+      itemStatus: item?.status || "",
+      reason: row.reason || "other",
+      note: row.note || "",
+      at: row.createdAt,
+    };
+  });
   const byStatus = Object.fromEntries(counts.map((row) => [row._id, row.n]));
   return {
     newsDay,
@@ -598,6 +613,7 @@ export async function currentAffairsStatus() {
     running: Boolean(running),
     lastRun: last ? { newsDay: last.dayKey, status: last.status, error: last.error || "", finishedAt: last.finishedAt } : null,
     archive: await archiveStatus(),
+    reports,
   };
 }
 

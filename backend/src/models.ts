@@ -1063,6 +1063,8 @@ export const CurrentAffairReport = mongoose.model(
       id: { type: String, required: true, unique: true },
       itemId: { type: String, required: true },
       studentId: { type: String, required: true },
+      reason: { type: String, enum: ["wrong_fact", "wrong_date", "wrong_source", "translation", "other"], default: "other" },
+      note: { type: String, default: "" },
     },
     { timestamps: true },
   ),

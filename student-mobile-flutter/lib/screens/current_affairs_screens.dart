@@ -148,14 +148,16 @@ class _CurrentAffairsScreenState extends State<CurrentAffairsScreen> with SafeSt
     _load();
   }
 
-  Future<void> _report(String id) async {
-    try {
-      await api('/current-affairs/$id/report', method: 'POST');
-      safe(() => reported.add(id));
-    } catch (err) {
-      safe(() => error = errorText(err));
-    }
-  }
+  /// A report must say what is wrong, so the admin can check it.
+  Future<void> _report(String id) => showSheet(
+        context,
+        title: 'What is wrong?',
+        builder: (sheetContext) => _ReportSheet(onSend: (reason, note) async {
+          await api('/current-affairs/$id/report', method: 'POST', body: {'reason': reason, 'note': note});
+          safe(() => reported.add(id));
+          if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+        }),
+      );
 
   String get _rangeLabel {
     if (from.isEmpty) return '';
@@ -405,6 +407,85 @@ class _CurrentAffairsQuizScreenState extends State<CurrentAffairsQuizScreen> {
             ]),
           ),
       ],
+    );
+  }
+}
+
+const _reportReasons = {
+  'wrong_fact': 'Wrong fact / number',
+  'wrong_date': 'Wrong date',
+  'wrong_source': 'Source does not say this',
+  'translation': 'Tamil / English mistake',
+  'other': 'Something else',
+};
+
+/// Reason + details are both required before a report can be sent.
+class _ReportSheet extends StatefulWidget {
+  const _ReportSheet({required this.onSend});
+  final Future<void> Function(String reason, String note) onSend;
+
+  @override
+  State<_ReportSheet> createState() => _ReportSheetState();
+}
+
+class _ReportSheetState extends State<_ReportSheet> with SafeState {
+  String reason = '';
+  String note = '';
+  bool sending = false;
+  String error = '';
+
+  bool get valid => reason.isNotEmpty && note.trim().length >= 10;
+
+  Future<void> send() async {
+    setState(() {
+      sending = true;
+      error = '';
+    });
+    try {
+      await widget.onSend(reason, note.trim());
+    } catch (err) {
+      safe(() => error = errorText(err));
+    } finally {
+      safe(() => sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final entry in _reportReasons.entries)
+            Tap(
+              label: entry.value,
+              onTap: () => setState(() => reason = entry.key),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: reason == entry.key ? palette.dangerSoft : palette.inset,
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: reason == entry.key ? palette.danger : palette.line),
+                ),
+                child: tx(entry.value, color: reason == entry.key ? palette.danger : palette.ink, size: 13, weight: w600),
+              ),
+            ),
+        ]),
+        gap(14),
+        tx('Tell us what is wrong and what is correct', color: palette.muted, size: 13, weight: w600),
+        gap(6),
+        PlainInput(
+          value: note,
+          onChanged: (value) => setState(() => note = value),
+          placeholder: 'e.g. The date should be 18 Nov, not 19 Nov',
+        ),
+        gap(4),
+        tx(note.trim().length < 10 ? 'At least 10 characters' : ' ', color: palette.muted, size: 12),
+        if (error.isNotEmpty) ...[gap(8), AppBanner(message: error)],
+        AppButton(label: 'Send report', tone: Tone.danger, disabled: !valid || sending, loading: sending, onPress: send),
+      ]),
     );
   }
 }
