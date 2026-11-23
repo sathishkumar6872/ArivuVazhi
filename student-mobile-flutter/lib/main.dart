@@ -37,6 +37,7 @@ class ArivuVazhiApp extends StatelessWidget {
             theme: ThemeData(
               brightness: palette.dark ? Brightness.dark : Brightness.light,
               scaffoldBackgroundColor: palette.bg,
+              fontFamily: 'Poppins',
               colorScheme: ColorScheme.fromSeed(
                 seedColor: palette.green,
                 brightness: palette.dark ? Brightness.dark : Brightness.light,
@@ -49,7 +50,7 @@ class ArivuVazhiApp extends StatelessWidget {
               // Floating, rounded snackbars that match the cards.
               snackBarTheme: SnackBarThemeData(
                 behavior: SnackBarBehavior.floating,
-                backgroundColor: palette.dark ? const Color(0xF0143326) : const Color(0xFF0B3D2E),
+                backgroundColor: palette.dark ? const Color(0xF0163156) : const Color(0xFF123B78),
                 contentTextStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 insetPadding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
@@ -76,7 +77,7 @@ class _PhoneFrame extends StatelessWidget {
     final size = MediaQuery.of(context).size;
     if (!kIsWeb || size.width < 500) return child;
     return ColoredBox(
-      color: const Color(0xFFE8F5EE),
+      color: const Color(0xFFE7F0FC),
       child: Center(
         child: Container(
           width: 390,
@@ -84,7 +85,7 @@ class _PhoneFrame extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(42),
-            border: Border.all(color: const Color(0xFF0B3D2E), width: 12),
+            border: Border.all(color: const Color(0xFF123B78), width: 12),
           ),
           child: MediaQuery(
             data: MediaQuery.of(context).copyWith(size: Size(366, (size.height - 72).clamp(376, 820).toDouble())),

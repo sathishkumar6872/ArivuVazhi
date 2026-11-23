@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
@@ -31,8 +32,8 @@ Text tx(
       color: color,
       fontSize: size,
       fontWeight: weight,
-      // Brand headings in Poppins; Tamil glyphs fall back to the system Tamil font.
-      fontFamily: isHeading(size, weight) ? headingFont : null,
+      // Poppins for all text (as in the design); Tamil glyphs fall back to the system Tamil font.
+      fontFamily: headingFont,
       height: lineHeight == null ? null : lineHeight / size,
       fontStyle: style,
       letterSpacing: letterSpacing,
@@ -78,12 +79,21 @@ Widget gap(double size) => SizedBox(height: size, width: size);
 // ---------------------------------------------------------------- screen + header
 
 class AppScreen extends StatelessWidget {
-  const AppScreen({super.key, this.children = const [], this.body, this.padded = true, this.controller, this.footer});
+  const AppScreen({
+    super.key,
+    this.children = const [],
+    this.body,
+    this.padded = true,
+    this.controller,
+    this.footer,
+    this.topPadding = 16,
+  });
 
   final List<Widget> children;
   final Widget? body;
   final bool padded;
   final ScrollController? controller;
+  final double topPadding;
 
   /// Pinned action bar under the scrolling content (e.g. Previous / Next in a quiz).
   final Widget? footer;
@@ -94,16 +104,27 @@ class AppScreen extends StatelessWidget {
     // Room for the floating tab bar / system bar (the shell adds it to MediaQuery padding).
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final content = body != null
-        ? (padded ? Padding(padding: const EdgeInsets.all(16), child: body) : body!)
+        ? (padded
+              ? Padding(padding: const EdgeInsets.all(16), child: body)
+              : body!)
         : ListView(
             controller: controller,
-            padding: padded ? EdgeInsets.fromLTRB(16, 16, 16, 28 + (footer == null ? bottomInset : 0)) : EdgeInsets.zero,
+            padding: padded
+                ? EdgeInsets.fromLTRB(
+                    16,
+                    topPadding,
+                    16,
+                    28 + (footer == null ? bottomInset : 0),
+                  )
+                : EdgeInsets.zero,
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
             children: [
               // Staggered entrance: each block fades up a moment after the one above it.
               for (var i = 0; i < children.length; i++)
                 FadeSlideIn(
-                  key: ValueKey('fade-$i-${children[i].runtimeType}-${children[i].key}'),
+                  key: ValueKey(
+                    'fade-$i-${children[i].runtimeType}-${children[i].key}',
+                  ),
                   delay: Duration(milliseconds: 35 * (i < 10 ? i : 10)),
                   child: children[i],
                 ),
@@ -111,23 +132,36 @@ class AppScreen extends StatelessWidget {
           );
     final withFooter = footer == null
         ? content
-        : Column(children: [
-            Expanded(child: content),
-            Frosted(
-              decoration: BoxDecoration(
-                color: palette.dark ? const Color(0xB30B1C15) : const Color(0xE6FFFFFF),
-                border: Border(top: BorderSide(color: palette.line)),
+        : Column(
+            children: [
+              Expanded(child: content),
+              Frosted(
+                decoration: BoxDecoration(
+                  color: palette.dark
+                      ? const Color(0xE60A1B36)
+                      : const Color(0xEBFFFFFF),
+                  border: Border(top: BorderSide(color: palette.line)),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + bottomInset),
+                  child: footer,
+                ),
               ),
-              child: Padding(padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + bottomInset), child: footer),
-            ),
-          ]);
+            ],
+          );
     // Transparent: the app backdrop (gradient + glow) shows through.
     return SafeArea(bottom: false, child: withFooter);
   }
 }
 
 class Header extends StatelessWidget {
-  const Header({super.key, required this.title, this.subtitle, this.onBack, this.right});
+  const Header({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.onBack,
+    this.right,
+  });
   final String title;
   final String? subtitle;
   final VoidCallback? onBack;
@@ -154,8 +188,16 @@ class Header extends StatelessWidget {
                         child: Container(
                           width: 40,
                           height: 40,
-                          decoration: glassBox(palette, radius: 14, shadow: false),
-                          child: Icon(Icons.chevron_left, size: 26, color: palette.ink),
+                          decoration: glassBox(
+                            palette,
+                            radius: 14,
+                            shadow: false,
+                          ),
+                          child: Icon(
+                            Icons.chevron_left,
+                            size: 26,
+                            color: palette.ink,
+                          ),
                         ),
                       ),
                     ),
@@ -164,16 +206,32 @@ class Header extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  tx(title, color: palette.ink, size: 17, weight: w700, lines: 1, align: TextAlign.center),
+                  tx(
+                    title,
+                    color: palette.ink,
+                    size: 17,
+                    weight: w700,
+                    lines: 1,
+                    align: TextAlign.center,
+                  ),
                   if (subtitle != null && subtitle!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: tx(subtitle!, color: palette.muted, size: 12, lines: 1, align: TextAlign.center),
+                      child: tx(
+                        subtitle!,
+                        color: palette.muted,
+                        size: 12,
+                        lines: 1,
+                        align: TextAlign.center,
+                      ),
                     ),
                 ],
               ),
             ),
-            SizedBox(width: 44, child: Align(alignment: Alignment.centerRight, child: right)),
+            SizedBox(
+              width: 44,
+              child: Align(alignment: Alignment.centerRight, child: right),
+            ),
           ],
         ),
       ),
@@ -239,14 +297,18 @@ class _AppButtonState extends State<AppButton> {
     final quietText = tone == Tone.ghost && !widget.iconOnly;
     final primary = tone == Tone.primary;
     final color = primary
-        ? palette.greenInk
+        ? Colors.white
         : tone == Tone.danger
-            ? palette.danger
-            : tone == Tone.onHero
-                ? const Color(0xFF0B3D2E)
-                : palette.primary;
+        ? palette.danger
+        : tone == Tone.onHero
+        ? const Color(0xFF123B78)
+        : palette.primary;
     final inactive = widget.disabled || busy;
-    final spinner = SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: color));
+    final spinner = SizedBox(
+      width: 18,
+      height: 18,
+      child: CircularProgressIndicator(strokeWidth: 2, color: color),
+    );
     // Primary: gradient + soft glow. Quiet text buttons: glass/white card. Icon chips: tinted.
     final BoxDecoration decoration = primary
         ? BoxDecoration(
@@ -255,38 +317,52 @@ class _AppButtonState extends State<AppButton> {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: palette.dark
-                  ? const [Color(0xFF34D399), Color(0xFF16A34A)]
-                  : const [Color(0xFF22C55E), Color(0xFF15803D)],
+                  ? const [Color(0xFF2389E8), Color(0xFF1559B0)]
+                  : const [Color(0xFF1769C2), Color(0xFF123B78)],
             ),
             boxShadow: inactive
                 ? null
-                : [BoxShadow(color: palette.green.withAlpha(0x59), blurRadius: 18, offset: const Offset(0, 8), spreadRadius: -6)],
+                : [
+                    BoxShadow(
+                      color: palette.green.withAlpha(0x59),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                      spreadRadius: -6,
+                    ),
+                  ],
           )
         : tone == Tone.onHero
-            ? BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 6), spreadRadius: -6)],
-              )
-            : tone == Tone.danger
-            ? BoxDecoration(
-                color: palette.dangerSoft,
-                borderRadius: BorderRadius.circular(widget.iconOnly ? 13 : 16),
-                border: Border.all(color: palette.danger.withAlpha(0x33)),
-              )
-            : tone == Tone.outline
-                ? BoxDecoration(
-                    color: palette.dark ? palette.surface : palette.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: palette.green),
-                  )
-                : quietText
-                    ? glassBox(palette, radius: 16, shadow: false)
-                    : BoxDecoration(
-                        color: palette.greenSoft,
-                        borderRadius: BorderRadius.circular(13),
-                        border: Border.all(color: palette.green.withAlpha(0x26)),
-                      );
+        ? BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 16,
+                offset: Offset(0, 6),
+                spreadRadius: -6,
+              ),
+            ],
+          )
+        : tone == Tone.danger
+        ? BoxDecoration(
+            color: palette.dangerSoft,
+            borderRadius: BorderRadius.circular(widget.iconOnly ? 13 : 16),
+            border: Border.all(color: palette.danger.withAlpha(0x33)),
+          )
+        : tone == Tone.outline
+        ? BoxDecoration(
+            color: palette.dark ? palette.surface : palette.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: palette.green),
+          )
+        : quietText
+        ? glassBox(palette, radius: 16, shadow: false)
+        : BoxDecoration(
+            color: palette.greenSoft,
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: palette.green.withAlpha(0x26)),
+          );
 
     if (widget.iconOnly && widget.icon != null) {
       return AnimatedOpacity(
@@ -305,7 +381,9 @@ class _AppButtonState extends State<AppButton> {
         ),
       );
     }
-    final label = busy ? (widget.label.endsWith('...') ? widget.label : '${widget.label}...') : widget.label;
+    final label = busy
+        ? (widget.label.endsWith('...') ? widget.label : '${widget.label}...')
+        : widget.label;
     return Padding(
       padding: EdgeInsets.only(top: widget.marginTop),
       child: AnimatedOpacity(
@@ -322,8 +400,19 @@ class _AppButtonState extends State<AppButton> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 if (busy) ...[spinner, gap(8)],
-                if (!busy && widget.icon != null) ...[Icon(widget.icon, size: 16, color: color), gap(8)],
-                Flexible(child: tx(label, color: color, weight: w700, size: 15, align: TextAlign.center)),
+                if (!busy && widget.icon != null) ...[
+                  Icon(widget.icon, size: 16, color: color),
+                  gap(8),
+                ],
+                Flexible(
+                  child: tx(
+                    label,
+                    color: color,
+                    weight: w700,
+                    size: 15,
+                    align: TextAlign.center,
+                  ),
+                ),
               ],
             ),
           ),
@@ -352,14 +441,14 @@ class IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AppButton(
-        label: label,
-        icon: icon,
-        onPress: onPress,
-        tone: tone,
-        disabled: disabled,
-        loading: loading,
-        iconOnly: true,
-      );
+    label: label,
+    icon: icon,
+    onPress: onPress,
+    tone: tone,
+    disabled: disabled,
+    loading: loading,
+    iconOnly: true,
+  );
 }
 
 /// Two widgets side by side with an 8px gap (RN `flexDirection: row, gap: 8` with flex: 1 children).
@@ -385,7 +474,13 @@ class Pair extends StatelessWidget {
 
 /// Grid laid out row by row with equal columns.
 class GridRows extends StatelessWidget {
-  const GridRows({super.key, required this.columns, required this.children, this.spacing = 10, this.runSpacing = 10});
+  const GridRows({
+    super.key,
+    required this.columns,
+    required this.children,
+    this.spacing = 10,
+    this.runSpacing = 10,
+  });
   final int columns;
   final List<Widget> children;
   final double spacing;
@@ -399,12 +494,23 @@ class GridRows extends StatelessWidget {
       for (var i = 0; i < columns; i++) {
         if (i > 0) cells.add(SizedBox(width: spacing));
         final index = start + i;
-        cells.add(Expanded(child: index < children.length ? children[index] : const SizedBox()));
+        cells.add(
+          Expanded(
+            child: index < children.length ? children[index] : const SizedBox(),
+          ),
+        );
       }
-      rows.add(Padding(
-        padding: EdgeInsets.only(bottom: runSpacing),
-        child: IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: cells)),
-      ));
+      rows.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: runSpacing),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: cells,
+            ),
+          ),
+        ),
+      );
     }
     return Column(children: rows);
   }
@@ -441,7 +547,9 @@ class Field extends StatefulWidget {
 }
 
 class _FieldState extends State<Field> {
-  late final TextEditingController _controller = TextEditingController(text: widget.value);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value,
+  );
   final FocusNode _focus = FocusNode();
   late bool _hidden = widget.secure;
 
@@ -482,7 +590,12 @@ class _FieldState extends State<Field> {
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
-            child: tx(widget.label, color: palette.muted, size: 13, weight: w600),
+            child: tx(
+              widget.label,
+              color: palette.muted,
+              size: 13,
+              weight: w600,
+            ),
           ),
           AnimatedContainer(
             duration: const Duration(milliseconds: 180),
@@ -494,20 +607,28 @@ class _FieldState extends State<Field> {
                 if (widget.icon != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: Icon(widget.icon, size: 18, color: focused ? palette.green : palette.muted),
+                    child: Icon(
+                      widget.icon,
+                      size: 18,
+                      color: focused ? palette.green : palette.muted,
+                    ),
                   ),
                 Expanded(
                   child: TextField(
                     controller: _controller,
                     focusNode: _focus,
                     onChanged: widget.onChanged,
-                    obscureText: widget.passwordToggle ? _hidden : widget.secure,
+                    obscureText: widget.passwordToggle
+                        ? _hidden
+                        : widget.secure,
                     keyboardType: email
                         ? TextInputType.emailAddress
                         : widget.keyboard == FieldKeyboard.number
-                            ? TextInputType.number
-                            : TextInputType.text,
-                    textCapitalization: email ? TextCapitalization.none : TextCapitalization.sentences,
+                        ? TextInputType.number
+                        : TextInputType.text,
+                    textCapitalization: email
+                        ? TextCapitalization.none
+                        : TextCapitalization.sentences,
                     autocorrect: !email && !widget.secure,
                     cursorColor: palette.green,
                     style: TextStyle(color: palette.ink, fontSize: 16),
@@ -527,7 +648,9 @@ class _FieldState extends State<Field> {
                     child: Padding(
                       padding: const EdgeInsets.all(4),
                       child: Icon(
-                        _hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                        _hidden
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
                         size: 18,
                         color: focused ? palette.green : palette.muted,
                       ),
@@ -543,12 +666,28 @@ class _FieldState extends State<Field> {
 }
 
 /// Input well: glass in dark, white in light; green ring + glow when focused.
-BoxDecoration _inputBox(Palette palette, bool focused, {double radius = 14, Color? color}) {
+BoxDecoration _inputBox(
+  Palette palette,
+  bool focused, {
+  double radius = 14,
+  Color? color,
+}) {
   return BoxDecoration(
     color: color ?? (palette.dark ? palette.inset : palette.surface),
     borderRadius: BorderRadius.circular(radius),
-    border: Border.all(color: focused ? palette.green : palette.line, width: focused ? 1.4 : 1),
-    boxShadow: focused ? [BoxShadow(color: palette.green.withAlpha(0x2E), blurRadius: 14, spreadRadius: 0)] : null,
+    border: Border.all(
+      color: focused ? palette.green : palette.line,
+      width: focused ? 1.4 : 1,
+    ),
+    boxShadow: focused
+        ? [
+            BoxShadow(
+              color: palette.green.withAlpha(0x2E),
+              blurRadius: 14,
+              spreadRadius: 0,
+            ),
+          ]
+        : null,
   );
 }
 
@@ -581,7 +720,9 @@ class PlainInput extends StatefulWidget {
 }
 
 class _PlainInputState extends State<PlainInput> {
-  late final TextEditingController _controller = TextEditingController(text: widget.value);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value,
+  );
   final FocusNode _focus = FocusNode();
 
   @override
@@ -619,19 +760,28 @@ class _PlainInputState extends State<PlainInput> {
       height: widget.height,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: _inputBox(palette, _focus.hasFocus, radius: widget.radius, color: widget.background),
+      decoration: _inputBox(
+        palette,
+        _focus.hasFocus,
+        radius: widget.radius,
+        color: widget.background,
+      ),
       child: TextField(
         controller: _controller,
         focusNode: _focus,
         onChanged: widget.onChanged,
         onSubmitted: (_) => widget.onSubmit?.call(),
-        textInputAction: widget.sendAction ? TextInputAction.send : TextInputAction.search,
+        textInputAction: widget.sendAction
+            ? TextInputAction.send
+            : TextInputAction.search,
         cursorColor: palette.green,
         style: TextStyle(color: palette.ink, fontSize: 15),
         decoration: InputDecoration(
           isDense: true,
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: widget.height == null ? 13 : 8),
+          contentPadding: EdgeInsets.symmetric(
+            vertical: widget.height == null ? 13 : 8,
+          ),
           hintText: widget.placeholder,
           hintStyle: TextStyle(color: palette.muted, fontSize: 15),
         ),
@@ -702,7 +852,9 @@ class ProgressBar extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(99),
-                  gradient: LinearGradient(colors: [palette.accent, palette.green]),
+                  gradient: LinearGradient(
+                    colors: [palette.accent, palette.green],
+                  ),
                 ),
               ),
             ),
@@ -714,7 +866,12 @@ class ProgressBar extends StatelessWidget {
 }
 
 class Segment extends StatelessWidget {
-  const Segment({super.key, required this.options, required this.value, required this.onChange});
+  const Segment({
+    super.key,
+    required this.options,
+    required this.value,
+    required this.onChange,
+  });
   final List<String> options;
   final String value;
   final ValueChanged<String> onChange;
@@ -728,53 +885,75 @@ class Segment extends StatelessWidget {
       padding: const EdgeInsets.all(4),
       decoration: palette.dark
           ? glassBox(palette, radius: 16, shadow: false)
-          : BoxDecoration(color: const Color(0xFFEDF1EE), borderRadius: BorderRadius.circular(16)),
-      child: LayoutBuilder(builder: (context, box) {
-        final width = box.maxWidth / options.length;
-        return Stack(children: [
-          // The selected pill slides between options.
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-            left: width * index,
-            top: 0,
-            bottom: 0,
-            width: width,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                gradient: LinearGradient(
-                  colors: palette.dark
-                      ? const [Color(0xFF34D399), Color(0xFF16A34A)]
-                      : const [Color(0xFF0B3D2E), Color(0xFF14532D)],
-                ),
-                boxShadow: [BoxShadow(color: palette.shadow, blurRadius: 10, offset: const Offset(0, 4))],
-              ),
+          : BoxDecoration(
+              color: const Color(0xFFE9F0F9),
+              borderRadius: BorderRadius.circular(16),
             ),
-          ),
-          Row(children: [
-            for (final option in options)
-              Expanded(
-                child: Tap(
-                  label: option,
-                  onTap: () => onChange(option),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 9),
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 200),
-                      style: TextStyle(
-                        color: option == value ? (palette.dark ? palette.greenInk : Colors.white) : palette.muted,
-                        fontWeight: w700,
-                        fontSize: 13,
-                      ),
-                      child: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final width = box.maxWidth / options.length;
+          return Stack(
+            children: [
+              // The selected pill slides between options.
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                left: width * index,
+                top: 0,
+                bottom: 0,
+                width: width,
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: palette.dark
+                          ? const [Color(0xFF2389E8), Color(0xFF1559B0)]
+                          : const [Color(0xFF123B78), Color(0xFF1769C2)],
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: palette.shadow,
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                 ),
               ),
-          ]),
-        ]);
-      }),
+              Row(
+                children: [
+                  for (final option in options)
+                    Expanded(
+                      child: Tap(
+                        label: option,
+                        onTap: () => onChange(option),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 9),
+                          child: AnimatedDefaultTextStyle(
+                            duration: const Duration(milliseconds: 200),
+                            style: TextStyle(
+                              color: option == value
+                                  ? Colors.white
+                                  : palette.muted,
+                              fontWeight: w700,
+                              fontSize: 13,
+                            ),
+                            child: Text(
+                              option,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -803,12 +982,22 @@ class ScoreRing extends StatelessWidget {
               CountUp(
                 value: value,
                 suffix: '%',
-                style: TextStyle(color: palette.primary, fontSize: 34, fontWeight: w800, fontFamily: headingFont),
+                style: TextStyle(
+                  color: palette.primary,
+                  fontSize: 34,
+                  fontWeight: w800,
+                  fontFamily: headingFont,
+                ),
               ),
               gap(2),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: tx(caption, color: palette.muted, align: TextAlign.center, lines: 2),
+                child: tx(
+                  caption,
+                  color: palette.muted,
+                  align: TextAlign.center,
+                  lines: 2,
+                ),
               ),
             ],
           ),
@@ -829,6 +1018,7 @@ class RingGauge extends StatelessWidget {
     required this.track,
     required this.child,
     this.fill,
+    this.gradient,
   });
   final num value;
   final double size;
@@ -838,32 +1028,107 @@ class RingGauge extends StatelessWidget {
   final Color? fill;
   final Widget child;
 
+  /// Optional colours swept along the filled arc (start → end), e.g. cyan → blue.
+  final List<Color>? gradient;
+
   @override
   Widget build(BuildContext context) {
     final fraction = (value.clamp(0, 100) / 100).toDouble();
     return SizedBox(
       width: size,
       height: size,
-      child: Stack(alignment: Alignment.center, children: [
-        if (fill != null) Container(decoration: BoxDecoration(shape: BoxShape.circle, color: fill)),
-        SizedBox.expand(
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: fraction),
-            duration: const Duration(milliseconds: 1000),
-            curve: Curves.easeOutCubic,
-            builder: (context, v, _) => CircularProgressIndicator(
-              value: v,
-              strokeWidth: stroke,
-              color: color,
-              backgroundColor: track,
-              strokeCap: StrokeCap.round,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (fill != null)
+            Container(
+              decoration: BoxDecoration(shape: BoxShape.circle, color: fill),
+            ),
+          SizedBox.expand(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: fraction),
+              duration: const Duration(milliseconds: 1000),
+              curve: Curves.easeOutCubic,
+              builder: (context, v, _) => gradient == null
+                  ? CircularProgressIndicator(
+                      value: v,
+                      strokeWidth: stroke,
+                      color: color,
+                      backgroundColor: track,
+                      strokeCap: StrokeCap.round,
+                    )
+                  : CustomPaint(
+                      painter: _GradientRing(
+                        value: v,
+                        stroke: stroke,
+                        track: track,
+                        colors: gradient!,
+                      ),
+                    ),
             ),
           ),
-        ),
-        child,
-      ]),
+          child,
+        ],
+      ),
     );
   }
+}
+
+/// Ring track plus a gradient arc from 12 o'clock, clockwise.
+class _GradientRing extends CustomPainter {
+  _GradientRing({
+    required this.value,
+    required this.stroke,
+    required this.track,
+    required this.colors,
+  });
+  final double value;
+  final double stroke;
+  final Color track;
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(
+      stroke / 2,
+      stroke / 2,
+      size.width - stroke,
+      size.height - stroke,
+    );
+    canvas.drawArc(
+      rect,
+      0,
+      math.pi * 2,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..color = track,
+    );
+    if (value <= 0) return;
+    final sweep = math.pi * 2 * value;
+    final shader = SweepGradient(
+      startAngle: 0,
+      endAngle: math.max(sweep, 0.01),
+      colors: colors,
+      transform: const GradientRotation(-math.pi / 2),
+    ).createShader(rect);
+    canvas.drawArc(
+      rect,
+      -math.pi / 2,
+      sweep,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..shader = shader,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_GradientRing old) =>
+      old.value != value || old.track != track;
 }
 
 // ---------------------------------------------------------------- accents + icons
@@ -876,27 +1141,51 @@ const Map<Accent, Color> accents = {
   Accent.olive: Color(0xFF4D7C0F),
   Accent.purple: Color(0xFF7C3AED),
   Accent.orange: Color(0xFFF59E0B),
-  Accent.red: Color(0xFFEF4444),
-  Accent.blue: Color(0xFF0EA5E9),
+  Accent.red: Color(0xFFF43F5E),
+  Accent.blue: Color(0xFF1769C2),
   Accent.lime: Color(0xFF65A30D),
   Accent.teal: Color(0xFF0D9488),
 };
 
-const _rotation = [Accent.green, Accent.blue, Accent.orange, Accent.red, Accent.purple, Accent.teal, Accent.lime];
+const _rotation = [
+  Accent.green,
+  Accent.blue,
+  Accent.orange,
+  Accent.red,
+  Accent.purple,
+  Accent.teal,
+  Accent.lime,
+];
 
 /// Rotating accent for lists without a natural colour (exams, unknown subjects).
 Accent accentAt(int index) => _rotation[index % _rotation.length];
 
 final List<(RegExp, IconData, Accent)> _subjectIcons = [
-  (RegExp(r'polity|constitution|civics|governance'), Icons.verified_user, Accent.red),
+  (
+    RegExp(r'polity|constitution|civics|governance'),
+    Icons.verified_user,
+    Accent.red,
+  ),
   (RegExp(r'history|heritage|culture'), Icons.hourglass_bottom, Accent.orange),
   (RegExp(r'geograph|environment|ecology'), Icons.public, Accent.blue),
-  (RegExp(r'aptitude|mental ability|reasoning|math|quantitative|numer'), Icons.calculate, Accent.purple),
+  (
+    RegExp(r'aptitude|mental ability|reasoning|math|quantitative|numer'),
+    Icons.calculate,
+    Accent.purple,
+  ),
   (RegExp(r'current affairs|news'), Icons.newspaper, Accent.orange),
-  (RegExp(r'tamil|english|language|grammar|literature'), Icons.translate, Accent.green),
+  (
+    RegExp(r'tamil|english|language|grammar|literature'),
+    Icons.translate,
+    Accent.green,
+  ),
   (RegExp(r'science|physics|chemistry|biology'), Icons.science, Accent.teal),
   (RegExp(r'econom|finance|budget|commerce'), Icons.payments, Accent.lime),
-  (RegExp(r'general studies|general knowledge|\bgk\b'), Icons.school, Accent.green),
+  (
+    RegExp(r'general studies|general knowledge|\bgk\b'),
+    Icons.school,
+    Accent.green,
+  ),
   (RegExp(r'computer|technology'), Icons.laptop, Accent.blue),
 ];
 
@@ -909,9 +1198,47 @@ final List<(RegExp, IconData, Accent)> _subjectIcons = [
   return (Icons.menu_book, accentAt(index));
 }
 
+/// Brand icon square (Home exam and current-affairs cards). Light: soft blue tile with a
+/// blue icon. Dark: solid blue tile with a white icon.
+class BrandIcon extends StatelessWidget {
+  const BrandIcon({super.key, required this.icon, this.size = 48});
+  final IconData icon;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = context.palette.dark;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular((size * 0.3).roundToDouble()),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: dark
+              ? const [Color(0xFF1E74D0), Color(0xFF14509E)]
+              : const [Color(0xFFEAF2FD), Color(0xFFDCE9FA)],
+        ),
+      ),
+      child: Icon(
+        icon,
+        size: (size * 0.52).roundToDouble(),
+        color: dark ? Colors.white : const Color(0xFF1769C2),
+      ),
+    );
+  }
+}
+
 /// Coloured icon on a soft tinted rounded square (list rows).
 class ColorIcon extends StatelessWidget {
-  const ColorIcon({super.key, required this.icon, this.accent = Accent.green, this.size = 44});
+  const ColorIcon({
+    super.key,
+    required this.icon,
+    this.accent = Accent.green,
+    this.size = 44,
+  });
   final IconData icon;
   final Accent accent;
   final double size;
@@ -924,7 +1251,8 @@ class ColorIcon extends StatelessWidget {
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: color.withAlpha(0x1F),
+        // Light: tint baked onto white so the backdrop glow doesn't muddy it.
+        color: context.palette.dark ? color.withAlpha(0x1F) : Color.alphaBlend(color.withAlpha(0x1F), Colors.white),
         borderRadius: BorderRadius.circular((size * 0.3).roundToDouble()),
       ),
       child: Icon(icon, size: (size * 0.5).roundToDouble(), color: color),
@@ -944,9 +1272,27 @@ const Map<String, dynamic> freshLevel = {
   'mastered': false,
   'percent': 0,
   'levels': {
-    'easy': {'answered': 0, 'correct': 0, 'accuracy': 0, 'unlocked': true, 'passed': false},
-    'medium': {'answered': 0, 'correct': 0, 'accuracy': 0, 'unlocked': false, 'passed': false},
-    'hard': {'answered': 0, 'correct': 0, 'accuracy': 0, 'unlocked': false, 'passed': false},
+    'easy': {
+      'answered': 0,
+      'correct': 0,
+      'accuracy': 0,
+      'unlocked': true,
+      'passed': false,
+    },
+    'medium': {
+      'answered': 0,
+      'correct': 0,
+      'accuracy': 0,
+      'unlocked': false,
+      'passed': false,
+    },
+    'hard': {
+      'answered': 0,
+      'correct': 0,
+      'accuracy': 0,
+      'unlocked': false,
+      'passed': false,
+    },
   },
 };
 
@@ -960,7 +1306,9 @@ class LevelSteps extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final progress = level is Map && level['levels'] is Map ? level as Map : freshLevel;
+    final progress = level is Map && level['levels'] is Map
+        ? level as Map
+        : freshLevel;
     final states = progress['levels'] as Map;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -968,24 +1316,47 @@ class LevelSteps extends StatelessWidget {
         children: [
           for (var i = 0; i < levels.length; i++) ...[
             if (i > 0) gap(6),
-            Expanded(child: _chip(context, palette, progress, asMap(states[levels[i]]), levels[i])),
+            Expanded(
+              child: _chip(
+                context,
+                palette,
+                progress,
+                asMap(states[levels[i]]),
+                levels[i],
+              ),
+            ),
           ],
         ],
       ),
     );
   }
 
-  Widget _chip(BuildContext context, Palette palette, Map progress, Map<String, dynamic> state, String name) {
+  Widget _chip(
+    BuildContext context,
+    Palette palette,
+    Map progress,
+    Map<String, dynamic> state,
+    String name,
+  ) {
     final passed = state['passed'] == true;
     final unlocked = state['unlocked'] == true;
     final current = progress['mastered'] != true && progress['current'] == name;
-    final color = passed ? palette.green : (current ? palette.primary : palette.muted);
-    final icon = passed ? Icons.check_circle : (unlocked ? Icons.play_circle : Icons.lock);
+    final color = passed
+        ? palette.green
+        : (current ? palette.primary : palette.muted);
+    final icon = passed
+        ? Icons.check_circle
+        : (unlocked ? Icons.play_circle : Icons.lock);
     final answered = intOf(state['answered']);
     return Opacity(
       opacity: unlocked ? 1 : 0.6,
       child: Tap(
-        label: '${levelName[name]} ${passed ? 'passed' : unlocked ? 'open' : 'locked'}',
+        label:
+            '${levelName[name]} ${passed
+                ? 'passed'
+                : unlocked
+                ? 'open'
+                : 'locked'}',
         onTap: !unlocked || onPick == null ? null : () => onPick!(name),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -993,7 +1364,9 @@ class LevelSteps extends StatelessWidget {
             color: passed ? palette.greenSoft : palette.surface,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: passed ? palette.green : (current ? palette.primary : palette.line),
+              color: passed
+                  ? palette.green
+                  : (current ? palette.primary : palette.line),
               width: current ? 1.5 : 1,
             ),
           ),
@@ -1004,7 +1377,12 @@ class LevelSteps extends StatelessWidget {
                 children: [
                   Icon(icon, size: 13, color: color),
                   gap(4),
-                  tx(context.t(levelName[name]!), color: color, weight: w800, size: 12),
+                  tx(
+                    context.t(levelName[name]!),
+                    color: color,
+                    weight: w800,
+                    size: 12,
+                  ),
                 ],
               ),
               gap(2),
@@ -1012,8 +1390,8 @@ class LevelSteps extends StatelessWidget {
                 answered > 0
                     ? '${state['accuracy']}% · $answered Q'
                     : unlocked
-                        ? 'Start'
-                        : 'Locked',
+                    ? 'Start'
+                    : 'Locked',
                 color: palette.muted,
                 size: 10,
               ),
@@ -1027,37 +1405,111 @@ class LevelSteps extends StatelessWidget {
 
 /// Quick-action tile: white card, coloured filled icon, label under it.
 class IconTile extends StatelessWidget {
-  const IconTile({super.key, required this.icon, required this.label, required this.onPress, this.accent = Accent.green});
+  const IconTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onPress,
+    this.accent = Accent.green,
+    this.compact = false,
+  });
   final IconData icon;
   final String label;
   final VoidCallback onPress;
   final Accent accent;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final color = accents[accent]!;
     return Tap(
       label: label,
       onTap: onPress,
+      // Each tile carries a soft tint of its icon colour (blue, orange, purple, green, red).
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-        decoration: glassBox(palette, radius: 20),
+        padding: EdgeInsets.symmetric(
+          vertical: compact ? 12 : 16,
+          horizontal: 4,
+        ),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: palette.dark
+                ? [
+                    Color.alphaBlend(color.withAlpha(0x47), palette.inset),
+                    Color.alphaBlend(color.withAlpha(0x1A), palette.inset),
+                  ]
+                : [
+                    Color.alphaBlend(color.withAlpha(0x1F), const Color(0xCCFFFFFF)),
+                    Color.alphaBlend(color.withAlpha(0x0A), const Color(0x8CFFFFFF)),
+                  ],
+          ),
+          border: Border.all(
+            color: color.withAlpha(palette.dark ? 0x59 : 0x1F),
+          ),
+          boxShadow: palette.dark
+              ? null
+              : [
+                  BoxShadow(
+                    color: palette.shadow,
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                    spreadRadius: -8,
+                  ),
+                ],
+        ),
+        foregroundDecoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          // Glossy diagonal sheen, as in the reference tiles.
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            stops: const [0, 0.45, 0.55, 1],
+            colors: palette.dark
+                ? const [
+                    Color(0x14FFFFFF),
+                    Color(0x05FFFFFF),
+                    Color(0x0FFFFFFF),
+                    Color(0x00FFFFFF),
+                  ]
+                : const [
+                    Color(0x66FFFFFF),
+                    Color(0x1AFFFFFF),
+                    Color(0x4DFFFFFF),
+                    Color(0x00FFFFFF),
+                  ],
+          ),
+        ),
         child: Column(
           children: [
             Container(
-              width: 46,
-              height: 46,
+              width: compact ? 44 : 48,
+              height: compact ? 44 : 48,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: accents[accent]!.withAlpha(palette.dark ? 0x33 : 0x1F),
-                boxShadow: palette.dark
-                    ? [BoxShadow(color: accents[accent]!.withAlpha(0x40), blurRadius: 16, spreadRadius: -4)]
-                    : null,
+                color: color.withAlpha(palette.dark ? 0x38 : 0x1F),
               ),
-              child: Icon(icon, size: 24, color: accents[accent]),
+              // Dark: icons a touch lighter so blue stays readable on navy.
+              child: Icon(
+                icon,
+                size: compact ? 23 : 25,
+                color: palette.dark
+                    ? Color.lerp(color, Colors.white, 0.22)
+                    : color,
+              ),
             ),
-            gap(8),
-            tx(label, color: palette.ink, size: 12, weight: w700, align: TextAlign.center, lines: 1),
+            gap(compact ? 8 : 10),
+            tx(
+              label,
+              color: palette.ink,
+              size: compact ? 12.5 : 13.5,
+              weight: w700,
+              align: TextAlign.center,
+              lines: 1,
+            ),
           ],
         ),
       ),
@@ -1081,7 +1533,7 @@ class Pill extends StatelessWidget {
       decoration: BoxDecoration(
         color: switch (tone) {
           PillTone.warn => palette.dangerSoft,
-          PillTone.good => palette.greenSoft,
+          PillTone.good => palette.goodSoft,
           PillTone.soft => palette.inset,
         },
         borderRadius: BorderRadius.circular(99),
@@ -1091,7 +1543,7 @@ class Pill extends StatelessWidget {
         label,
         color: switch (tone) {
           PillTone.warn => palette.danger,
-          PillTone.good => palette.green,
+          PillTone.good => palette.good,
           PillTone.soft => palette.muted,
         },
         size: 12,
@@ -1104,7 +1556,11 @@ class Pill extends StatelessWidget {
 enum BannerTone { error, info, success }
 
 class AppBanner extends StatelessWidget {
-  const AppBanner({super.key, required this.message, this.tone = BannerTone.error});
+  const AppBanner({
+    super.key,
+    required this.message,
+    this.tone = BannerTone.error,
+  });
   final String message;
   final BannerTone tone;
 
@@ -1120,7 +1576,7 @@ class AppBanner extends StatelessWidget {
         color: switch (tone) {
           BannerTone.error => palette.dangerSoft,
           BannerTone.info => palette.infoSoft,
-          BannerTone.success => palette.greenSoft,
+          BannerTone.success => palette.goodSoft,
         },
         borderRadius: BorderRadius.circular(12),
       ),
@@ -1129,7 +1585,7 @@ class AppBanner extends StatelessWidget {
         color: switch (tone) {
           BannerTone.error => palette.danger,
           BannerTone.info => palette.info,
-          BannerTone.success => palette.green,
+          BannerTone.success => palette.good,
         },
         lineHeight: 20,
       ),
@@ -1140,7 +1596,13 @@ class AppBanner extends StatelessWidget {
 // ---------------------------------------------------------------- loading + empty
 
 class Bone extends StatelessWidget {
-  const Bone({super.key, this.width, this.widthFactor, this.height = 14, this.radius = 8});
+  const Bone({
+    super.key,
+    this.width,
+    this.widthFactor,
+    this.height = 14,
+    this.radius = 8,
+  });
   final double? width;
   final double? widthFactor;
   final double height;
@@ -1153,18 +1615,29 @@ class Bone extends StatelessWidget {
       child: Container(
         width: width,
         height: height,
-        decoration: BoxDecoration(color: context.palette.line, borderRadius: BorderRadius.circular(radius)),
+        decoration: BoxDecoration(
+          color: context.palette.line,
+          borderRadius: BorderRadius.circular(radius),
+        ),
       ),
     );
-    if (width != null) return Align(alignment: Alignment.centerLeft, child: box);
-    return Align(alignment: Alignment.centerLeft, child: FractionallySizedBox(widthFactor: widthFactor ?? 1, child: box));
+    if (width != null)
+      return Align(alignment: Alignment.centerLeft, child: box);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: FractionallySizedBox(widthFactor: widthFactor ?? 1, child: box),
+    );
   }
 }
 
 enum LoadingVariant { list, home, quiz, spinner }
 
 class SkeletonCards extends StatelessWidget {
-  const SkeletonCards({super.key, this.rows = 4, this.variant = LoadingVariant.list});
+  const SkeletonCards({
+    super.key,
+    this.rows = 4,
+    this.variant = LoadingVariant.list,
+  });
   final int rows;
   final LoadingVariant variant;
 
@@ -1178,7 +1651,10 @@ class SkeletonCards extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: palette.line),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      ),
     );
   }
 
@@ -1192,25 +1668,33 @@ class SkeletonCards extends StatelessWidget {
           child: Column(
             children: [
               _card(context, [
-                Row(children: [
-                  const Bone(width: 92, height: 92, radius: 46),
-                  gap(16),
-                  Expanded(
-                    child: Column(children: [
-                      const Bone(widthFactor: 0.4, height: 12),
-                      gap(8),
-                      const Bone(widthFactor: 0.8, height: 18),
-                      gap(8),
-                      const Bone(widthFactor: 0.6, height: 12),
-                    ]),
-                  ),
-                ]),
+                Row(
+                  children: [
+                    const Bone(width: 92, height: 92, radius: 46),
+                    gap(16),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          const Bone(widthFactor: 0.4, height: 12),
+                          gap(8),
+                          const Bone(widthFactor: 0.8, height: 18),
+                          gap(8),
+                          const Bone(widthFactor: 0.6, height: 12),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ]),
               gap(2),
               const Bone(height: 64, radius: 16),
               gap(12),
               for (var i = 0; i < 3; i++)
-                _card(context, [const Bone(widthFactor: 0.7, height: 16), gap(10), const Bone(widthFactor: 0.45, height: 12)]),
+                _card(context, [
+                  const Bone(widthFactor: 0.7, height: 16),
+                  gap(10),
+                  const Bone(widthFactor: 0.45, height: 12),
+                ]),
             ],
           ),
         ),
@@ -1221,15 +1705,20 @@ class SkeletonCards extends StatelessWidget {
         label: 'Loading',
         child: Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: Column(children: [
-            const Bone(widthFactor: 0.35, height: 12),
-            gap(12),
-            const Bone(height: 8, radius: 99),
-            gap(20),
-            const Bone(height: 72, radius: 14),
-            gap(20),
-            for (var i = 0; i < 4; i++) ...[const Bone(height: 52, radius: 14), gap(12)],
-          ]),
+          child: Column(
+            children: [
+              const Bone(widthFactor: 0.35, height: 12),
+              gap(12),
+              const Bone(height: 8, radius: 99),
+              gap(20),
+              const Bone(height: 72, radius: 14),
+              gap(20),
+              for (var i = 0; i < 4; i++) ...[
+                const Bone(height: 52, radius: 14),
+                gap(12),
+              ],
+            ],
+          ),
         ),
       );
     }
@@ -1237,23 +1726,30 @@ class SkeletonCards extends StatelessWidget {
       label: 'Loading',
       child: Padding(
         padding: const EdgeInsets.only(top: 4),
-        child: Column(children: [
-          for (var i = 0; i < rows; i++)
-            _card(context, [
-              Bone(widthFactor: (70 - (i % 3) * 8) / 100, height: 16),
-              gap(10),
-              const Bone(widthFactor: 0.5, height: 12),
-              gap(12),
-              const Bone(height: 8, radius: 99),
-            ]),
-        ]),
+        child: Column(
+          children: [
+            for (var i = 0; i < rows; i++)
+              _card(context, [
+                Bone(widthFactor: (70 - (i % 3) * 8) / 100, height: 16),
+                gap(10),
+                const Bone(widthFactor: 0.5, height: 12),
+                gap(12),
+                const Bone(height: 8, radius: 99),
+              ]),
+          ],
+        ),
       ),
     );
   }
 }
 
 class Loading extends StatelessWidget {
-  const Loading({super.key, this.label, this.variant = LoadingVariant.list, this.rows = 4});
+  const Loading({
+    super.key,
+    this.label,
+    this.variant = LoadingVariant.list,
+    this.rows = 4,
+  });
   final String? label;
   final LoadingVariant variant;
   final int rows;
@@ -1261,24 +1757,38 @@ class Loading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final spinner = SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5, color: palette.green));
+    final spinner = SizedBox(
+      width: 20,
+      height: 20,
+      child: CircularProgressIndicator(strokeWidth: 2.5, color: palette.green),
+    );
     if (variant == LoadingVariant.spinner) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 32),
-        child: Column(children: [
-          spinner,
-          if (label != null) ...[gap(8), tx(label!, color: palette.muted)],
-        ]),
+        child: Column(
+          children: [
+            spinner,
+            if (label != null) ...[gap(8), tx(label!, color: palette.muted)],
+          ],
+        ),
       );
     }
-    return Column(children: [
-      if (label != null)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Row(children: [spinner, gap(8), Expanded(child: tx(label!, color: palette.muted))]),
-        ),
-      SkeletonCards(rows: rows, variant: variant),
-    ]);
+    return Column(
+      children: [
+        if (label != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                spinner,
+                gap(8),
+                Expanded(child: tx(label!, color: palette.muted)),
+              ],
+            ),
+          ),
+        SkeletonCards(rows: rows, variant: variant),
+      ],
+    );
   }
 }
 
@@ -1292,18 +1802,34 @@ class Empty extends StatelessWidget {
     final palette = context.palette;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
-      child: Column(children: [
-        Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(color: palette.greenSoft, shape: BoxShape.circle),
-          child: Icon(Icons.eco_outlined, size: 32, color: palette.green),
-        ),
-        gap(14),
-        tx(title, color: palette.ink, size: 18, weight: w700, align: TextAlign.center),
-        gap(8),
-        tx(body, color: palette.muted, align: TextAlign.center, lineHeight: 20),
-      ]),
+      child: Column(
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: palette.greenSoft,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.eco_outlined, size: 32, color: palette.green),
+          ),
+          gap(14),
+          tx(
+            title,
+            color: palette.ink,
+            size: 18,
+            weight: w700,
+            align: TextAlign.center,
+          ),
+          gap(8),
+          tx(
+            body,
+            color: palette.muted,
+            align: TextAlign.center,
+            lineHeight: 20,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1311,7 +1837,14 @@ class Empty extends StatelessWidget {
 enum ChoiceState { idle, selected, correct, wrong }
 
 class Choice extends StatelessWidget {
-  const Choice({super.key, required this.letter, required this.text, required this.state, required this.onPress, this.disabled = false});
+  const Choice({
+    super.key,
+    required this.letter,
+    required this.text,
+    required this.state,
+    required this.onPress,
+    this.disabled = false,
+  });
   final String letter;
   final String text;
   final ChoiceState state;
@@ -1328,7 +1861,7 @@ class Choice extends StatelessWidget {
       ChoiceState.idle => palette.line,
     };
     final background = switch (state) {
-      ChoiceState.correct => palette.greenSoft,
+      ChoiceState.correct => palette.goodSoft,
       ChoiceState.wrong => palette.dangerSoft,
       ChoiceState.selected => palette.greenSoft,
       ChoiceState.idle => null,
@@ -1340,7 +1873,13 @@ class Choice extends StatelessWidget {
       ChoiceState.idle => palette.inset,
     };
     final idle = state == ChoiceState.idle;
-    final box = glassBox(palette, radius: 16, color: background, border: border, shadow: idle);
+    final box = glassBox(
+      palette,
+      radius: 16,
+      color: background,
+      border: border,
+      shadow: idle,
+    );
     return AnswerFeedback(
       trigger: state.name,
       child: Tap(
@@ -1350,23 +1889,36 @@ class Choice extends StatelessWidget {
           duration: const Duration(milliseconds: 220),
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(13),
-          decoration: box.copyWith(border: Border.all(color: border, width: idle ? 1 : 1.6)),
-          child: Row(children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              width: 30,
-              height: 30,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: letterColor),
-              child: state == ChoiceState.correct
-                  ? const Icon(Icons.check, size: 17, color: Colors.white)
-                  : state == ChoiceState.wrong
-                      ? const Icon(Icons.close, size: 17, color: Colors.white)
-                      : tx(letter, weight: w700, color: idle ? palette.ink : Colors.white),
-            ),
-            gap(12),
-            Expanded(child: tx(text, color: palette.ink, lineHeight: 21, size: 14.5)),
-          ]),
+          decoration: box.copyWith(
+            border: Border.all(color: border, width: idle ? 1 : 1.6),
+          ),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: letterColor,
+                ),
+                child: state == ChoiceState.correct
+                    ? const Icon(Icons.check, size: 17, color: Colors.white)
+                    : state == ChoiceState.wrong
+                    ? const Icon(Icons.close, size: 17, color: Colors.white)
+                    : tx(
+                        letter,
+                        weight: w700,
+                        color: idle ? palette.ink : Colors.white,
+                      ),
+              ),
+              gap(12),
+              Expanded(
+                child: tx(text, color: palette.ink, lineHeight: 21, size: 14.5),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1402,27 +1954,33 @@ Future<void> showConfirm(
             border: Border.all(color: palette.line),
           ),
           child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              tx(title, color: palette.ink, size: 18, weight: w700),
-              gap(8),
-              tx(body, color: palette.muted, lineHeight: 20),
-              gap(8),
-              AppButton(
-                label: confirm,
-                tone: danger ? Tone.danger : Tone.primary,
-                onPress: () async {
-                  await onConfirm();
-                  if (dialogContext.mounted) Navigator.of(dialogContext).pop();
-                },
-              ),
-              if (cancel != null) AppButton(label: cancel, tone: Tone.ghost, onPress: () => Navigator.of(dialogContext).pop()),
-            ],
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                tx(title, color: palette.ink, size: 18, weight: w700),
+                gap(8),
+                tx(body, color: palette.muted, lineHeight: 20),
+                gap(8),
+                AppButton(
+                  label: confirm,
+                  tone: danger ? Tone.danger : Tone.primary,
+                  onPress: () async {
+                    await onConfirm();
+                    if (dialogContext.mounted)
+                      Navigator.of(dialogContext).pop();
+                  },
+                ),
+                if (cancel != null)
+                  AppButton(
+                    label: cancel,
+                    tone: Tone.ghost,
+                    onPress: () => Navigator.of(dialogContext).pop(),
+                  ),
+              ],
+            ),
           ),
-        ),
         ),
       );
     },
@@ -1430,7 +1988,11 @@ Future<void> showConfirm(
 }
 
 /// Bottom sheet with a handle and title.
-Future<void> showSheet(BuildContext context, {required String title, required WidgetBuilder builder}) {
+Future<void> showSheet(
+  BuildContext context, {
+  required String title,
+  required WidgetBuilder builder,
+}) {
   final palette = context.palette;
   return showModalBottomSheet<void>(
     context: context,
@@ -1438,7 +2000,9 @@ Future<void> showSheet(BuildContext context, {required String title, required Wi
     backgroundColor: Colors.transparent,
     barrierColor: const Color(0x8C040B08),
     builder: (sheetContext) => ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.8),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(sheetContext).size.height * 0.8,
+      ),
       child: Frosted(
         radius: 0,
         decoration: BoxDecoration(
@@ -1447,24 +2011,27 @@ Future<void> showSheet(BuildContext context, {required String title, required Wi
           border: Border(top: BorderSide(color: palette.line)),
         ),
         child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(color: palette.line, borderRadius: BorderRadius.circular(99)),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: palette.line,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
               ),
-            ),
-            gap(12),
-            tx(title, color: palette.ink, size: 18, weight: w700),
-            gap(12),
-            builder(sheetContext),
-          ],
+              gap(12),
+              tx(title, color: palette.ink, size: 18, weight: w700),
+              gap(12),
+              builder(sheetContext),
+            ],
+          ),
         ),
-      ),
       ),
     ),
   );
@@ -1488,8 +2055,18 @@ class AppTabBar extends StatelessWidget {
       ('home', Icons.home_rounded, Icons.home_outlined, 'Home'),
       ('exams', Icons.menu_book_rounded, Icons.menu_book_outlined, 'Exams'),
       ('tutor', Icons.auto_awesome, Icons.auto_awesome, 'AI Tutor'),
-      ('practice', Icons.assignment_rounded, Icons.assignment_outlined, 'Practice'),
-      ('profile', Icons.person_rounded, Icons.person_outline_rounded, 'Profile'),
+      (
+        'practice',
+        Icons.assignment_rounded,
+        Icons.assignment_outlined,
+        'Practice',
+      ),
+      (
+        'profile',
+        Icons.person_rounded,
+        Icons.person_outline_rounded,
+        'Profile',
+      ),
     ];
     final bottom = MediaQuery.of(context).padding.bottom;
     return Padding(
@@ -1497,54 +2074,81 @@ class AppTabBar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(28),
-          boxShadow: [BoxShadow(color: palette.shadow, blurRadius: 30, offset: const Offset(0, 12), spreadRadius: -6)],
+          boxShadow: [
+            BoxShadow(
+              color: palette.shadow,
+              blurRadius: 30,
+              offset: const Offset(0, 12),
+              spreadRadius: -6,
+            ),
+          ],
         ),
-        child: Stack(clipBehavior: Clip.none, children: [
-          Frosted(
-            radius: 28,
-            decoration: BoxDecoration(
-              color: palette.dark ? const Color(0xB30B1C15) : const Color(0xEBFFFFFF),
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: palette.dark ? const Color(0x2EFFFFFF) : palette.line),
-            ),
-            child: SizedBox(
-              height: 66,
-              child: Row(children: [
-                for (final (id, activeIcon, icon, label) in items)
-                  Expanded(
-                    child: id == 'tutor'
-                        ? Tap(
-                            label: label,
-                            onTap: () => onChange(id),
-                            child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-                              tx(context.t(label), size: 10, weight: w700, color: tab == id ? palette.green : palette.muted, lines: 1),
-                              gap(9),
-                            ]),
-                          )
-                        : _TabItem(
-                            label: context.t(label),
-                            icon: tab == id ? activeIcon : icon,
-                            active: tab == id,
-                            onTap: () => onChange(id),
-                          ),
-                  ),
-              ]),
-            ),
-          ),
-          // Raised AI button floats above the bar.
-          Positioned(
-            top: -22,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Tap(
-                label: 'AI Tutor',
-                onTap: () => onChange('tutor'),
-                child: const _AiTabButton(),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Frosted(
+              radius: 28,
+              decoration: BoxDecoration(
+                color: palette.dark
+                    ? const Color(0xB80D1F3B)
+                    : const Color(0xB8FFFFFF),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(
+                  color: palette.dark ? const Color(0x40A9CCFF) : const Color(0xE6FFFFFF),
+                ),
+              ),
+              child: SizedBox(
+                height: 66,
+                child: Row(
+                  children: [
+                    for (final (id, activeIcon, icon, label) in items)
+                      Expanded(
+                        child: id == 'tutor'
+                            ? Tap(
+                                label: label,
+                                onTap: () => onChange(id),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    tx(
+                                      context.t(label),
+                                      size: 10,
+                                      weight: w700,
+                                      color: tab == id
+                                          ? palette.green
+                                          : palette.muted,
+                                      lines: 1,
+                                    ),
+                                    gap(9),
+                                  ],
+                                ),
+                              )
+                            : _TabItem(
+                                label: context.t(label),
+                                icon: tab == id ? activeIcon : icon,
+                                active: tab == id,
+                                onTap: () => onChange(id),
+                              ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ]),
+            // Raised AI button floats above the bar.
+            Positioned(
+              top: -22,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Tap(
+                  label: 'AI Tutor',
+                  onTap: () => onChange('tutor'),
+                  child: const _AiTabButton(),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1559,10 +2163,16 @@ class _AiTabButton extends StatefulWidget {
   State<_AiTabButton> createState() => _AiTabButtonState();
 }
 
-class _AiTabButtonState extends State<_AiTabButton> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-  late final Animation<double> _lift = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+class _AiTabButtonState extends State<_AiTabButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1500),
+  );
+  late final Animation<double> _lift = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeInOut,
+  );
 
   @override
   void didChangeDependencies() {
@@ -1591,29 +2201,51 @@ class _AiTabButtonState extends State<_AiTabButton> with SingleTickerProviderSta
         final t = _lift.value;
         return Transform.translate(
           offset: Offset(0, -3 * t),
-          child: Container(
-            width: 58,
-            height: 58,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF4ADE80), Color(0xFF15803D)],
-              ),
-              border: Border.all(color: palette.dark ? const Color(0x4DFFFFFF) : Colors.white, width: 3),
-              boxShadow: [
-                // Glow grows and softens as the button rises.
-                BoxShadow(
-                  color: palette.green.withAlpha((0x59 + 0x33 * t).round()),
-                  blurRadius: 16 + 10 * t,
-                  offset: Offset(0, 8 + 3 * t),
-                  spreadRadius: -4,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const RadialGradient(
+                    center: Alignment(-0.3, -0.4),
+                    radius: 0.9,
+                    colors: [Color(0xFF1E5FC0), Color(0xFF0A2457)],
+                  ),
+                  // Light: white ring. Dark: bright blue ring.
+                  border: Border.all(
+                    color: palette.dark
+                        ? const Color(0xFF4FA8FF)
+                        : Colors.white,
+                    width: 3,
+                  ),
+                  boxShadow: [
+                    // Blue glow grows and softens as the button rises.
+                    BoxShadow(
+                      color: const Color(0xFF1769C2)
+                          .withAlpha((0x66 + 0x33 * t).round()),
+                      blurRadius: 18 + 10 * t,
+                      offset: Offset(0, 8 + 3 * t),
+                      spreadRadius: -2,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: child,
+                child: child,
+              ),
+              // Small sparkles above the button.
+              const Positioned(
+                top: 0,
+                right: -4,
+                child: Icon(
+                  Icons.auto_awesome,
+                  size: 14,
+                  color: Color(0xFF19BFFF),
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -1623,7 +2255,12 @@ class _AiTabButtonState extends State<_AiTabButton> with SingleTickerProviderSta
 }
 
 class _TabItem extends StatelessWidget {
-  const _TabItem({required this.label, required this.icon, required this.active, required this.onTap});
+  const _TabItem({
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.onTap,
+  });
   final String label;
   final IconData icon;
   final bool active;
@@ -1633,29 +2270,42 @@ class _TabItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final color = active ? palette.green : palette.muted;
+    // Dark: solid blue pill with a light icon. Light: soft blue pill with a blue icon.
+    final iconColor = active && palette.dark ? const Color(0xFFE6F3FF) : color;
     return Tap(
       label: label,
       onTap: onTap,
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        // Active tab gets a soft pill behind its icon that grows in.
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          width: active ? 46 : 30,
-          height: 28,
-          decoration: BoxDecoration(
-            color: active ? palette.greenSoft : Colors.transparent,
-            borderRadius: BorderRadius.circular(99),
-          ),
-          child: AnimatedScale(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Active tab gets a soft pill behind its icon that grows in.
+          AnimatedContainer(
             duration: const Duration(milliseconds: 240),
-            scale: active ? 1.08 : 1,
-            child: Icon(icon, size: 21, color: color),
+            curve: Curves.easeOutCubic,
+            width: active ? 46 : 30,
+            height: 28,
+            decoration: BoxDecoration(
+              color: active
+                  ? (palette.dark ? const Color(0xFF1769C2) : palette.greenSoft)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: AnimatedScale(
+              duration: const Duration(milliseconds: 240),
+              scale: active ? 1.08 : 1,
+              child: Icon(icon, size: 21, color: iconColor),
+            ),
           ),
-        ),
-        gap(3),
-        tx(label, size: 10, weight: active ? w800 : w600, color: color, lines: 1),
-      ]),
+          gap(3),
+          tx(
+            label,
+            size: 10,
+            weight: active ? w800 : w600,
+            color: color,
+            lines: 1,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1669,10 +2319,15 @@ class Wordmark extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final word = Text.rich(
-      TextSpan(children: [
-        const TextSpan(text: 'Arivu'),
-        TextSpan(text: 'Vazhi', style: TextStyle(color: light ? palette.highlight : palette.green)),
-      ]),
+      TextSpan(
+        children: [
+          const TextSpan(text: 'Arivu'),
+          TextSpan(
+            text: 'Vazhi',
+            style: TextStyle(color: light ? palette.highlight : palette.green),
+          ),
+        ],
+      ),
       style: TextStyle(
         fontSize: centered ? 22 : 18,
         fontWeight: centered ? w800 : w700,
@@ -1680,35 +2335,49 @@ class Wordmark extends StatelessWidget {
       ),
     );
     if (centered) {
-      return Column(mainAxisSize: MainAxisSize.min, children: [
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: light ? const Color(0x29FFFFFF) : palette.greenSoft,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(
+              Icons.menu_book,
+              size: 28,
+              color: light ? Colors.white : palette.green,
+            ),
+          ),
+          gap(8),
+          word,
+        ],
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
         Container(
-          width: 56,
-          height: 56,
+          width: 32,
+          height: 32,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: light ? const Color(0x29FFFFFF) : palette.greenSoft,
-            borderRadius: BorderRadius.circular(16),
+            color: light ? const Color(0x2EFFFFFF) : palette.green,
+            borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(Icons.menu_book, size: 28, color: light ? Colors.white : palette.green),
+          child: Icon(
+            Icons.menu_book,
+            size: 16,
+            color: light ? Colors.white : palette.greenInk,
+          ),
         ),
         gap(8),
         word,
-      ]);
-    }
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        width: 32,
-        height: 32,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: light ? const Color(0x2EFFFFFF) : palette.green,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Icon(Icons.menu_book, size: 16, color: light ? Colors.white : palette.greenInk),
-      ),
-      gap(8),
-      word,
-    ]);
+      ],
+    );
   }
 }
 
@@ -1765,34 +2434,47 @@ class SwitchRow extends StatelessWidget {
     final palette = context.palette;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(border: divider ? Border(top: BorderSide(color: palette.line)) : null),
-      child: Row(children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, size: 18, color: palette.green),
-        ),
-        gap(12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            tx(title, color: palette.ink, weight: w700),
-            if (subtitle != null) ...[gap(2), tx(subtitle!, color: palette.muted, size: 12)],
-          ]),
-        ),
-        Semantics(
-          label: title,
-          toggled: value,
-          child: Switch(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: Colors.white,
-            activeTrackColor: palette.green,
-            inactiveThumbColor: palette.surface,
-            inactiveTrackColor: palette.line,
+      decoration: BoxDecoration(
+        border: divider ? Border(top: BorderSide(color: palette.line)) : null,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: palette.greenSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: palette.green),
           ),
-        ),
-      ]),
+          gap(12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                tx(title, color: palette.ink, weight: w700),
+                if (subtitle != null) ...[
+                  gap(2),
+                  tx(subtitle!, color: palette.muted, size: 12),
+                ],
+              ],
+            ),
+          ),
+          Semantics(
+            label: title,
+            toggled: value,
+            child: Switch(
+              value: value,
+              onChanged: onChanged,
+              activeThumbColor: Colors.white,
+              activeTrackColor: palette.green,
+              inactiveThumbColor: palette.surface,
+              inactiveTrackColor: palette.line,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

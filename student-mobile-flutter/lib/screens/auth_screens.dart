@@ -19,11 +19,11 @@ class SplashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0xFF0B3D2E),
+      color: const Color(0xFF0A2457),
       child: Stack(fit: StackFit.expand, children: [
         Opacity(opacity: 0.55, child: Image.asset(BrandImages.mountain, fit: BoxFit.cover)),
         Container(
-          color: const Color(0x8C08281E),
+          color: const Color(0x8C06152E),
           padding: const EdgeInsets.all(24),
           child: SafeArea(
             child: Column(
@@ -34,7 +34,7 @@ class SplashScreen extends StatelessWidget {
                   child: Column(children: [
                     const Wordmark(light: true, centered: true),
                     gap(10),
-                    tx('LEARN • PRACTICE • ACHIEVE', color: const Color(0xFFA7F3D0), letterSpacing: 2, size: 11, weight: w700),
+                    tx('LEARN • PRACTICE • ACHIEVE', color: const Color(0xFFBFE3FF), letterSpacing: 2, size: 11, weight: w700),
                   ]),
                 ),
                 Column(children: [
@@ -42,7 +42,7 @@ class SplashScreen extends StatelessWidget {
                       color: Colors.white, size: 30, weight: w800, align: TextAlign.center, lineHeight: 38),
                   gap(12),
                   tx('Learn smarter, practice better, and achieve your goal with AI.',
-                      color: const Color(0xFFD1FAE5), size: 15, lineHeight: 22, align: TextAlign.center),
+                      color: const Color(0xFFDCEBFF), size: 15, lineHeight: 22, align: TextAlign.center),
                 ]),
               ],
             ),
@@ -169,11 +169,11 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
       ];
       final slide = slides[splashPage];
       return ColoredBox(
-        color: const Color(0xFF071F18),
+        color: const Color(0xFF06152E),
         child: Stack(fit: StackFit.expand, children: [
           Image.asset(BrandImages.mountain, fit: BoxFit.cover),
           Container(
-            color: const Color(0x94071F18),
+            color: const Color(0x9406152E),
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(22, 56, 22, 28),
@@ -183,7 +183,7 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
                     Column(children: [
                       const Wordmark(light: true, centered: true),
                       gap(10),
-                      tx('LEARN • PRACTICE • ACHIEVE', color: const Color(0xFFA7F3D0), letterSpacing: 2.2, size: 11, weight: w700),
+                      tx('LEARN • PRACTICE • ACHIEVE', color: const Color(0xFFBFE3FF), letterSpacing: 2.2, size: 11, weight: w700),
                     ]),
                     Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                       // Fixed-height text area so the button does not jump between slides.
@@ -195,7 +195,7 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
                           children: [
                             tx(slide.$1, color: Colors.white, size: 27, weight: w800, lineHeight: 34, lines: 3),
                             gap(12),
-                            tx(slide.$2, color: const Color(0xFFD1FAE5), size: 15, lineHeight: 22, lines: 3),
+                            tx(slide.$2, color: const Color(0xFFDCEBFF), size: 15, lineHeight: 22, lines: 3),
                           ],
                         ),
                       ),
@@ -206,7 +206,7 @@ class _AuthFlowState extends State<AuthFlow> with SafeState {
                       Tap(
                         onTap: () => _setMode(_AuthMode.register),
                         child: tx('New here? Create an account',
-                            color: const Color(0xFFA7F3D0), align: TextAlign.center, weight: w700),
+                            color: const Color(0xFFBFE3FF), align: TextAlign.center, weight: w700),
                       ),
                     ]),
                   ],

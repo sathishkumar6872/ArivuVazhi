@@ -48,9 +48,9 @@
 
 ## 5. Mobile visual design (implemented 20 Nov 2026)
 
-- **Light:** soft green-white gradient background with a faint glow, white cards with deep soft shadows, gradient hero cards (home score, profile, tutor), glowing gradient primary buttons, floating white tab bar.
-- **Dark:** glassmorphism. Translucent cards and inputs with hairline borders over an emerald-black backdrop with green/teal glow; frosted floating tab bar, action bars, dialogs and sheets. All screens share the same glass treatment.
-- **Colour roles:** forest green `#16A34A` for main actions and progress, deep green `#0B3D2E` for headings and hero cards, gold only for rewards (streak flame, earned achievements), blue for info banners, red for errors and wrong answers, green for correct answers.
+- **Theme "Matte Blue" (owner-supplied reference, 23 Nov 2026).** Light: background `#F8FBFF`, white cards with subtle shadows, text `#102A56` / `#64748B`, border `#E5EDF7`. Dark: background `#06152E`, cards `#102440` with `#263D5B` borders and controlled elevation, text `#F5F8FF` / `#AABBD1`. Both: primary `#123B78`, secondary `#1769C2`, accent `#19BFFF`.
+- **Home:** navy header band behind the greeting (white text), navy gradient hero card with a cyan accuracy ring and a soft wave, exam and current-affairs cards with a blue icon tile, Quick action tiles tinted by their icon colour (blue, orange, purple, green, red), floating tab bar with a raised navy AI button.
+- **Colour roles:** blue for main actions and progress, gold only for rewards (streak flame, earned achievements), red for errors and wrong answers, green for correct answers.
 - **Hierarchy:** one solid primary action per screen; secondary actions are outline/glass; quiz, mock and PYQ actions are pinned at the bottom.
 - **Type:** Poppins for headings (Tamil falls back to the system Tamil font), system font for body text.
 - **Motion (light):** screen fade/slide, staggered list entrance, press scale, ring and progress fill with count-up, sliding segment pill, correct-answer pulse and wrong-answer shake, typing dots, gently floating AI tab button (still when the system reduces motion).

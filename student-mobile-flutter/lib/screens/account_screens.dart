@@ -18,7 +18,7 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final quick = [
-      ('Analytics', Icons.bar_chart, Accent.orange, 'analytics'),
+      ('Analytics', Icons.bar_chart, Accent.red, 'analytics'),
       ('Notes', Icons.description, Accent.green, 'notes'),
       ('Bookmarks', Icons.bookmark, Accent.orange, 'bookmarks'),
       ('Achievements', Icons.emoji_events, Accent.purple, 'achievements'),
@@ -49,7 +49,7 @@ class ProfileScreen extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               tx('${user.firstName} ${user.lastName}', color: Colors.white, size: 20, weight: w800),
               gap(2),
-              tx(user.email, color: const Color(0xFFA7F3D0), lines: 1),
+              tx(user.email, color: const Color(0xFFBFE3FF), lines: 1),
               gap(6),
               tx(
                 '${appTamil ? context.t('Tamil') : context.t('English')} · Exam ${examTamil ? context.t('Tamil') : context.t('English')}',

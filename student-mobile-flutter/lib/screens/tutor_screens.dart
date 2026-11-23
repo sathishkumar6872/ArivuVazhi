@@ -75,7 +75,7 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 tx('ArivuVazhi AI Tutor', color: Colors.white, size: 17, weight: w800),
                 gap(4),
-                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: const Color(0xFFA7F3D0), lineHeight: 18, size: 13),
+                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: const Color(0xFFBFE3FF), lineHeight: 18, size: 13),
               ]),
             ),
           ]),

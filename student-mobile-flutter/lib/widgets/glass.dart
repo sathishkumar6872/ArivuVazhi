@@ -25,18 +25,38 @@ class AppBackground extends StatelessWidget {
           colors: [palette.bgTop, palette.bgBottom],
         ),
       ),
-      child: Stack(fit: StackFit.expand, children: [
-        _Glow(color: palette.glowA, alignment: const Alignment(-1.3, -1.05), size: 1.25),
-        _Glow(color: palette.glowB, alignment: const Alignment(1.4, 0.35), size: 1.1),
-        if (palette.dark) _Glow(color: palette.glowA.withAlpha(0x22), alignment: const Alignment(-0.6, 1.2), size: 0.9),
-        child,
-      ]),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _Glow(
+            color: palette.glowA,
+            alignment: const Alignment(-1.3, -1.05),
+            size: 1.25,
+          ),
+          _Glow(
+            color: palette.glowB,
+            alignment: const Alignment(1.4, 0.35),
+            size: 1.1,
+          ),
+          if (palette.dark)
+            _Glow(
+              color: palette.glowA.withAlpha(0x22),
+              alignment: const Alignment(-0.6, 1.2),
+              size: 0.9,
+            ),
+          child,
+        ],
+      ),
     );
   }
 }
 
 class _Glow extends StatelessWidget {
-  const _Glow({required this.color, required this.alignment, required this.size});
+  const _Glow({
+    required this.color,
+    required this.alignment,
+    required this.size,
+  });
   final Color color;
   final Alignment alignment;
   final double size;
@@ -63,8 +83,8 @@ class _Glow extends StatelessWidget {
 
 // ---------------------------------------------------------------- surfaces
 
-/// Card surface. Light: solid white with a soft, wide shadow. Dark: frosted glass —
-/// translucent fill, top-left sheen and a hairline border.
+/// Card surface: frosted glass in both themes — translucent fill with a top-left sheen,
+/// a light hairline border, and (light) a soft, wide shadow.
 BoxDecoration glassBox(
   Palette palette, {
   double radius = 18,
@@ -76,12 +96,12 @@ BoxDecoration glassBox(
     return BoxDecoration(
       color: color ?? palette.surface,
       borderRadius: BorderRadius.circular(radius),
-      border: Border.all(color: border ?? palette.line),
+      border: Border.all(color: border ?? const Color(0x40A9CCFF)),
       gradient: color == null
           ? const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [Color(0x1CFFFFFF), Color(0x08FFFFFF)],
+              colors: [Color(0x2EA9CCFF), Color(0x0D7DB4FF)],
             )
           : null,
     );
@@ -89,11 +109,27 @@ BoxDecoration glassBox(
   return BoxDecoration(
     color: color ?? palette.surface,
     borderRadius: BorderRadius.circular(radius),
-    border: Border.all(color: border ?? palette.line),
+    border: Border.all(color: border ?? (color == null ? const Color(0xE6FFFFFF) : palette.line)),
+    gradient: color == null
+        ? const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xE6FFFFFF), Color(0xA6FFFFFF)],
+          )
+        : null,
     boxShadow: shadow
         ? [
-            BoxShadow(color: palette.shadow, blurRadius: 24, offset: const Offset(0, 10), spreadRadius: -8),
-            const BoxShadow(color: Color(0x08000000), blurRadius: 3, offset: Offset(0, 1)),
+            BoxShadow(
+              color: palette.shadow,
+              blurRadius: 24,
+              offset: const Offset(0, 10),
+              spreadRadius: -8,
+            ),
+            const BoxShadow(
+              color: Color(0x08000000),
+              blurRadius: 3,
+              offset: Offset(0, 1),
+            ),
           ]
         : null,
   );
@@ -101,7 +137,13 @@ BoxDecoration glassBox(
 
 /// Real frosted glass (backdrop blur) for fixed chrome: tab bar, action bars, sheets.
 class Frosted extends StatelessWidget {
-  const Frosted({super.key, required this.child, this.radius = 0, this.decoration, this.blur = 24});
+  const Frosted({
+    super.key,
+    required this.child,
+    this.radius = 0,
+    this.decoration,
+    this.blur = 24,
+  });
   final Widget child;
   final double radius;
   final BoxDecoration? decoration;
@@ -113,13 +155,17 @@ class Frosted extends StatelessWidget {
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: DecoratedBox(decoration: decoration ?? const BoxDecoration(), child: child),
+        child: DecoratedBox(
+          decoration: decoration ?? const BoxDecoration(),
+          child: child,
+        ),
       ),
     );
   }
 }
 
-/// Gradient hero card with decorative rings (home score, profile, tutor).
+/// Navy gradient hero card with a soft wave in the lower right (home score, profile, tutor).
+/// Text on it is always white.
 class HeroCard extends StatelessWidget {
   const HeroCard({
     super.key,
@@ -146,41 +192,137 @@ class HeroCard extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [palette.heroStart, palette.heroEnd],
         ),
-        border: palette.dark ? Border.all(color: const Color(0x3386EFAC)) : null,
+        // The reference uses the same crisp cyan hairline in both themes.
+        border: Border.all(color: const Color(0xFF45CEFF), width: 1),
         boxShadow: [
           BoxShadow(
-            color: palette.dark ? const Color(0x4022C55E) : const Color(0x400B3D2E),
-            blurRadius: 30,
-            offset: const Offset(0, 14),
-            spreadRadius: -12,
+            color: palette.dark
+                ? const Color(0x521769C2)
+                : const Color(0x33123B78),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+            spreadRadius: -10,
           ),
         ],
       ),
-      child: Stack(children: [
-        Positioned(right: -40, top: -50, child: _ring(150)),
-        Positioned(right: 30, bottom: -70, child: _ring(120)),
-        Padding(padding: padding, child: child),
-      ]),
+      child: Stack(
+        children: [
+          const Positioned.fill(
+            child: IgnorePointer(child: CustomPaint(painter: _WavePainter())),
+          ),
+          Padding(padding: padding, child: child),
+        ],
+      ),
+    );
+  }
+}
+
+/// Two soft light-blue waves rising towards the bottom-right corner.
+class _WavePainter extends CustomPainter {
+  const _WavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    Path wave(double lift) => Path()
+      ..moveTo(w * 0.35, h)
+      ..cubicTo(
+        w * 0.6,
+        h * (0.86 - lift),
+        w * 0.8,
+        h * (0.98 - lift),
+        w,
+        h * (0.55 - lift),
+      )
+      ..lineTo(w, h)
+      ..close();
+    canvas.drawPath(wave(0.12), Paint()..color = const Color(0x1F19BFFF));
+    canvas.drawPath(
+      wave(0),
+      Paint()
+        ..shader = const LinearGradient(
+          colors: [Color(0x0019BFFF), Color(0x8019BFFF)],
+        ).createShader(Rect.fromLTWH(w * 0.35, 0, w * 0.65, h)),
+    );
+    // Bright crest line along the wave.
+    final crest = Path()
+      ..moveTo(w * 0.35, h)
+      ..cubicTo(w * 0.6, h * 0.86, w * 0.8, h * 0.98, w, h * 0.55);
+    canvas.drawPath(
+      crest,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..shader = const LinearGradient(
+          colors: [Color(0x0019BFFF), Color(0xCC5FD3FF)],
+        ).createShader(Rect.fromLTWH(w * 0.35, 0, w * 0.65, h)),
     );
   }
 
-  Widget _ring(double size) => IgnorePointer(
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: const Color(0x14FFFFFF), width: 18),
-          ),
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Navy band behind the Home greeting. Fades into the page at the bottom.
+class HeaderBand extends StatelessWidget {
+  const HeaderBand({super.key, required this.height});
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return IgnorePointer(
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: const [0, 0.62, 1],
+                  colors: [
+                    const Color(0xFF0A2457),
+                    const Color(0xFF1148A0),
+                    palette.bg.withAlpha(0),
+                  ],
+                ),
+              ),
+            ),
+            // A faint diagonal light streak, as in the reference.
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: const Alignment(-0.2, -1),
+                  end: const Alignment(1, 0.4),
+                  stops: const [0.42, 0.55, 0.72],
+                  colors: [
+                    const Color(0x0019BFFF),
+                    const Color(0x4019BFFF),
+                    palette.bg.withAlpha(0),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
 // ---------------------------------------------------------------- motion
 
 /// Shrinks the child a little while pressed (tactile feedback without a ripple).
 class PressScale extends StatefulWidget {
-  const PressScale({super.key, required this.child, this.enabled = true, this.scale = 0.97});
+  const PressScale({
+    super.key,
+    required this.child,
+    this.enabled = true,
+    this.scale = 0.97,
+  });
   final Widget child;
   final bool enabled;
   final double scale;
@@ -215,7 +357,12 @@ class _PressScaleState extends State<PressScale> {
 
 /// Fades and slides the child in once, after an optional delay (staggered lists).
 class FadeSlideIn extends StatefulWidget {
-  const FadeSlideIn({super.key, required this.child, this.delay = Duration.zero, this.offset = 14});
+  const FadeSlideIn({
+    super.key,
+    required this.child,
+    this.delay = Duration.zero,
+    this.offset = 14,
+  });
   final Widget child;
   final Duration delay;
   final double offset;
@@ -224,10 +371,16 @@ class FadeSlideIn extends StatefulWidget {
   State<FadeSlideIn> createState() => _FadeSlideInState();
 }
 
-class _FadeSlideInState extends State<FadeSlideIn> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
-  late final Animation<double> _curve = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
+class _FadeSlideInState extends State<FadeSlideIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 380),
+  );
+  late final Animation<double> _curve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+  );
   Timer? _timer;
 
   @override
@@ -255,7 +408,10 @@ class _FadeSlideInState extends State<FadeSlideIn> with SingleTickerProviderStat
       animation: _curve,
       builder: (context, child) => Opacity(
         opacity: _curve.value,
-        child: Transform.translate(offset: Offset(0, (1 - _curve.value) * widget.offset), child: child),
+        child: Transform.translate(
+          offset: Offset(0, (1 - _curve.value) * widget.offset),
+          child: child,
+        ),
       ),
       child: widget.child,
     );
@@ -264,7 +420,13 @@ class _FadeSlideInState extends State<FadeSlideIn> with SingleTickerProviderStat
 
 /// Number that counts up from 0 to [value] the first time it is shown.
 class CountUp extends StatelessWidget {
-  const CountUp({super.key, required this.value, required this.style, this.suffix = '', this.decimals = 0});
+  const CountUp({
+    super.key,
+    required this.value,
+    required this.style,
+    this.suffix = '',
+    this.decimals = 0,
+  });
   final num value;
   final TextStyle style;
   final String suffix;
@@ -276,7 +438,8 @@ class CountUp extends StatelessWidget {
       tween: Tween(begin: 0, end: value.toDouble()),
       duration: const Duration(milliseconds: 900),
       curve: Curves.easeOutCubic,
-      builder: (context, v, _) => Text('${v.toStringAsFixed(decimals)}$suffix', style: style),
+      builder: (context, v, _) =>
+          Text('${v.toStringAsFixed(decimals)}$suffix', style: style),
     );
   }
 }
@@ -293,14 +456,18 @@ class AnswerFeedback extends StatefulWidget {
   State<AnswerFeedback> createState() => _AnswerFeedbackState();
 }
 
-class _AnswerFeedbackState extends State<AnswerFeedback> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
+class _AnswerFeedbackState extends State<AnswerFeedback>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
 
   @override
   void didUpdateWidget(AnswerFeedback oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.trigger != oldWidget.trigger && (widget.trigger == 'correct' || widget.trigger == 'wrong')) {
+    if (widget.trigger != oldWidget.trigger &&
+        (widget.trigger == 'correct' || widget.trigger == 'wrong')) {
       _controller.forward(from: 0);
     }
   }

@@ -2,8 +2,12 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 
-/// Design tokens. Light = premium soft surfaces; dark = glassmorphism over a glowing
-/// emerald backdrop. Every screen reads colours from here, so both themes stay consistent.
+/// Design tokens — "Matte Blue". Light: #F8FBFF page, white cards, soft shadows.
+/// Dark: #06152E page, #102440 cards with hairline borders. Every screen reads colours
+/// from here, so both themes stay consistent.
+///
+/// Token names are historical: `green` is the brand action colour (blue now), `primary`
+/// the heading colour. Correct / success states use `good` + `goodSoft` (real green).
 class Palette {
   const Palette({
     required this.bg,
@@ -30,6 +34,7 @@ class Palette {
     required this.danger,
     required this.dangerSoft,
     required this.good,
+    required this.goodSoft,
     required this.info,
     required this.infoSoft,
     required this.heroStart,
@@ -41,82 +46,99 @@ class Palette {
   /// Page base colour and the backdrop gradient + two soft glow blobs.
   final Color bg, bgTop, bgBottom, glowA, glowB;
 
-  /// `surface`: cards (white in light, translucent glass in dark).
-  /// `elevated`: dialogs and sheets (always mostly opaque).
-  /// `inset`: wells inside cards (inputs, letter chips, calendar cells).
+  /// `surface`: cards. `elevated`: dialogs and sheets. `inset`: wells inside cards.
   final Color surface, elevated, inset;
+
   /// `gold` / `goldSoft`: rewards only (streak, achievements, mastered).
   final Color gold, goldSoft;
-  final Color ink, muted, line, primary, green, accent, highlight, greenInk, greenSoft, mint, amber, danger,
-      dangerSoft, good, info, infoSoft, shadow;
+  final Color ink,
+      muted,
+      line,
+      primary,
+      green,
+      accent,
+      highlight,
+      greenInk,
+      greenSoft,
+      mint,
+      amber,
+      danger,
+      dangerSoft,
+      good,
+      goodSoft,
+      info,
+      infoSoft,
+      shadow;
 
   /// Hero card gradient (home score, profile, tutor). Text on it is always white.
   final Color heroStart, heroEnd;
   final bool dark;
 
   static const light = Palette(
-    bg: Color(0xFFF3F7F4),
-    bgTop: Color(0xFFF8FBF9),
-    bgBottom: Color(0xFFEAF3EE),
-    glowA: Color(0x2E34D399),
-    glowB: Color(0x1F38BDF8),
+    bg: Color(0xFFF8FBFF),
+    bgTop: Color(0xFFF8FBFF),
+    bgBottom: Color(0xFFF1F6FD),
+    glowA: Color(0x3819BFFF),
+    glowB: Color(0x2B1769C2),
     surface: Color(0xFFFFFFFF),
     elevated: Color(0xFFFFFFFF),
-    inset: Color(0xFFF2F6F3),
-    ink: Color(0xFF0B1F17),
-    muted: Color(0xFF5E6E66),
-    line: Color(0xFFE3ECE6),
-    primary: Color(0xFF0B3D2E),
-    green: Color(0xFF16A34A),
-    accent: Color(0xFF22C55E),
-    highlight: Color(0xFFA3E635),
+    inset: Color(0xFFF1F5FB),
+    ink: Color(0xFF102A56),
+    muted: Color(0xFF64748B),
+    line: Color(0xFFE5EDF7),
+    primary: Color(0xFF102A56),
+    green: Color(0xFF1769C2),
+    accent: Color(0xFF19BFFF),
+    highlight: Color(0xFF19BFFF),
     greenInk: Color(0xFFFFFFFF),
-    greenSoft: Color(0xFFE6F7ED),
-    mint: Color(0xFFD5F5E3),
+    greenSoft: Color(0xFFE7F0FC),
+    mint: Color(0xFFDCEAFB),
     amber: Color(0xFFF59E0B),
     gold: Color(0xFFD97706),
     goldSoft: Color(0xFFFEF3C7),
     danger: Color(0xFFE5484D),
     dangerSoft: Color(0xFFFDECEC),
-    good: Color(0xFF10B981),
-    info: Color(0xFF2563EB),
-    infoSoft: Color(0xFFEAF1FD),
-    heroStart: Color(0xFF0B3D2E),
-    heroEnd: Color(0xFF15803D),
-    shadow: Color(0x1A0B3D2E),
+    good: Color(0xFF16A34A),
+    goodSoft: Color(0xFFE6F7ED),
+    info: Color(0xFF1769C2),
+    infoSoft: Color(0xFFE7F0FC),
+    heroStart: Color(0xFF0A2457),
+    heroEnd: Color(0xFF1769C2),
+    shadow: Color(0x1A123B78),
     dark: false,
   );
 
   static const darkPalette = Palette(
-    bg: Color(0xFF040B08),
-    bgTop: Color(0xFF071811),
-    bgBottom: Color(0xFF020604),
-    glowA: Color(0x5522C55E),
-    glowB: Color(0x3D14B8A6),
-    surface: Color(0x17FFFFFF),
-    elevated: Color(0xF00D1C16),
-    inset: Color(0x12FFFFFF),
-    ink: Color(0xFFEFFCF5),
-    muted: Color(0xFFA3BAAF),
-    line: Color(0x24FFFFFF),
-    primary: Color(0xFFB4F5D5),
-    green: Color(0xFF22C55E),
-    accent: Color(0xFF4ADE80),
-    highlight: Color(0xFFBEF264),
-    greenInk: Color(0xFF03261A),
-    greenSoft: Color(0x2922C55E),
-    mint: Color(0x334ADE80),
+    bg: Color(0xFF06152E),
+    bgTop: Color(0xFF081B3A),
+    bgBottom: Color(0xFF05122A),
+    glowA: Color(0x661769C2),
+    glowB: Color(0x3D19BFFF),
+    surface: Color(0xF2102440),
+    elevated: Color(0xFA0E2039),
+    inset: Color(0xFF0B1C36),
+    ink: Color(0xFFF5F8FF),
+    muted: Color(0xFFAABBD1),
+    line: Color(0xFF263D5B),
+    primary: Color(0xFFF5F8FF),
+    green: Color(0xFF19BFFF),
+    accent: Color(0xFF19BFFF),
+    highlight: Color(0xFF7DD8FF),
+    greenInk: Color(0xFF06152E),
+    greenSoft: Color(0x331769C2),
+    mint: Color(0x401769C2),
     amber: Color(0xFFFBBF24),
     gold: Color(0xFFFBBF24),
     goldSoft: Color(0x29FBBF24),
     danger: Color(0xFFF87171),
     dangerSoft: Color(0x2EF87171),
     good: Color(0xFF34D399),
+    goodSoft: Color(0x2934D399),
     info: Color(0xFF7DB4FF),
-    infoSoft: Color(0x2E60A5FA),
-    heroStart: Color(0x8C15803D),
-    heroEnd: Color(0x5914B8A6),
-    shadow: Color(0x59000000),
+    infoSoft: Color(0x2E1769C2),
+    heroStart: Color(0xFF0A2457),
+    heroEnd: Color(0xFF1769C2),
+    shadow: Color(0x66000000),
     dark: true,
   );
 }
@@ -192,9 +214,11 @@ class AppState extends ChangeNotifier {
 }
 
 class AppScope extends InheritedNotifier<AppState> {
-  const AppScope({super.key, required AppState state, required super.child}) : super(notifier: state);
+  const AppScope({super.key, required AppState state, required super.child})
+    : super(notifier: state);
 
-  static AppState of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
+  static AppState of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
 }
 
 extension AppContext on BuildContext {

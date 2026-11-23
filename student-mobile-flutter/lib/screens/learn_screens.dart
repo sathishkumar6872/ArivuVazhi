@@ -459,7 +459,7 @@ class _PyqPaperScreenState extends State<PyqPaperScreen> with SafeState {
                   correct
                       ? 'Correct'
                       : 'Your answer ${str(item['selectedKey']).isEmpty ? '—' : str(item['selectedKey'])} · Key ${str(item['correctKey'])}',
-                  color: correct ? palette.green : palette.danger,
+                  color: correct ? palette.good : palette.danger,
                   weight: w800,
                 ),
                 if (str(item['explanation']).isNotEmpty)
@@ -687,7 +687,7 @@ class _PracticeScreenState extends State<PracticeScreen> with SafeState {
                       color: palette.ink, weight: w800),
                 ),
                 gap(8),
-                tx('${session['correct']}/${session['answered']}', color: palette.green, weight: w800),
+                tx('${session['correct']}/${session['answered']}', color: palette.good, weight: w800),
               ]),
               gap(2),
               tx(
@@ -1027,7 +1027,7 @@ class _QuizScreenState extends State<QuizScreen> with SafeState {
             borderColor: Colors.transparent,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               tx(feedback['correct'] == true ? 'Correct answer' : 'Answer ${str(feedback['correctKey'])}',
-                  color: feedback['correct'] == true ? palette.green : palette.danger, weight: w800),
+                  color: feedback['correct'] == true ? palette.good : palette.danger, weight: w800),
               gap(6),
               tx(str(feedback['explanation']), color: palette.ink, lineHeight: 20),
             ]),

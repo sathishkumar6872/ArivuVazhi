@@ -42,9 +42,19 @@ The release build is still signed with the debug key. To update installs of the 
 
 ## Design
 
-- **Light**: premium soft surfaces, gradient hero cards, glowing primary buttons.
-- **Dark**: glassmorphism — translucent cards over an emerald glow, frosted tab bar and action bars.
-- Brand: forest green (`#16A34A`), deep green (`#0B3D2E`); gold for rewards only (streak, achievements). Headings in Poppins (bundled, OFL).
+Theme "Matte Blue" (23 Nov 2026), tokens in `lib/core/app_state.dart`:
+
+| | Light | Dark |
+|---|---|---|
+| Background | `#F8FBFF` | `#06152E` |
+| Card | `#FFFFFF` (soft shadow) | `#102440` (hairline border `#263D5B`) |
+| Primary / secondary / accent | `#123B78` / `#1769C2` / `#19BFFF` | same |
+| Text / secondary text | `#102A56` / `#64748B` | `#F5F8FF` / `#AABBD1` |
+| Border | `#E5EDF7` | `#263D5B` |
+
+- Home: navy header band behind the greeting, navy hero card with a cyan ring and soft wave, brand icon tiles, tinted Quick action tiles, floating tab bar with a navy AI button.
+- Correct answers / success use green (`good`, `goodSoft`); gold is for rewards only. Headings in Poppins (bundled, OFL).
+- The token names `green` / `greenSoft` are historical: they hold the brand blue.
 - Motion is light and respects the system "reduce motion" setting where it loops.
 
 ## Behaviour worth knowing
