@@ -77,9 +77,9 @@ class Palette {
   static const light = Palette(
     bg: Color(0xFFF8FBFF),
     bgTop: Color(0xFFF8FBFF),
-    bgBottom: Color(0xFFF1F6FD),
-    glowA: Color(0x3819BFFF),
-    glowB: Color(0x2B1769C2),
+    bgBottom: Color(0xFFEEF5FF),
+    glowA: Color(0x2419BFFF),
+    glowB: Color(0x1A1769C2),
     surface: Color(0xFFFFFFFF),
     elevated: Color(0xFFFFFFFF),
     inset: Color(0xFFF1F5FB),

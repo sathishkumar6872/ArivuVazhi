@@ -1119,11 +1119,7 @@ class StatTile extends StatelessWidget {
     final palette = context.palette;
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: palette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: palette.line),
-      ),
+      decoration: glassBox(palette, radius: 14, shadow: false),
       child: Column(
         children: [
           tx(value, color: palette.ink, size: valueSize, weight: w800),

@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import '../core/api.dart';
 import '../core/app_state.dart';
 import '../core/nav.dart';
+import '../widgets/glass.dart';
 import '../widgets/rich_text.dart';
 import '../widgets/ui.dart';
 
@@ -15,8 +16,8 @@ String _plainPreview(String text) => stripLatex(text)
     .trim();
 
 const _starters = [
-  ('Explain', Icons.menu_book, Accent.green, 'Explain this topic'),
-  ('Practice', Icons.help, Accent.orange, 'Give one practice question'),
+  ('Explain', Icons.menu_book_outlined, Accent.blue, 'Explain this topic'),
+  ('Practice', Icons.help, Accent.blue, 'Give one practice question'),
   ('Revise', Icons.refresh, Accent.purple, 'Revise the last point'),
 ];
 
@@ -59,31 +60,53 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
       Header(title: context.t('AI Tutor')),
       if (error.isNotEmpty) AppBanner(message: error),
       HeroCard(
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(16),
-        radius: 22,
+        art: HeroArt.tutor,
+        border: false,
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+        radius: 26,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(color: const Color(0x24FFFFFF), borderRadius: BorderRadius.circular(16)),
-              child: Icon(Icons.auto_awesome, size: 24, color: palette.highlight),
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                color: const Color(0x332389E8),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0x3319BFFF)),
+              ),
+              child: const Icon(Icons.auto_awesome, size: 30, color: Color(0xFF19BFFF)),
             ),
-            gap(12),
+            gap(14),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                tx('ArivuVazhi AI Tutor', color: Colors.white, size: 17, weight: w800),
+                tx('ArivuVazhi AI Tutor', color: Colors.white, size: 19, weight: w800, lines: 1),
                 gap(4),
-                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: const Color(0xFFBFE3FF), lineHeight: 18, size: 13),
+                tx('Tamil, English or Tanglish. Grounded in approved notes.', color: const Color(0xFFDCEBFF), lineHeight: 19, size: 13.5),
               ]),
             ),
           ]),
-          gap(4),
-          AppButton(label: 'Start chat', icon: Icons.arrow_forward, tone: Tone.onHero, onPress: () => go(AppRoute('chat'))),
+          gap(16),
+          Tap(
+            label: 'Start chat',
+            onTap: () => go(AppRoute('chat')),
+            child: Container(
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(99),
+                boxShadow: const [BoxShadow(color: Color(0x33061A3A), blurRadius: 14, offset: Offset(0, 6), spreadRadius: -4)],
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.arrow_forward, size: 22, color: Color(0xFF102A56)),
+                gap(10),
+                tx(context.t('Start chat'), color: const Color(0xFF102A56), size: 16, weight: w800),
+              ]),
+            ),
+          ),
         ]),
       ),
-      Padding(padding: const EdgeInsets.only(bottom: 10), child: tx('Quick prompts', color: palette.primary, weight: w800)),
+      Padding(padding: const EdgeInsets.only(bottom: 10), child: tx('Quick prompts', color: palette.primary, size: 18, weight: w800)),
       Padding(
         padding: const EdgeInsets.only(bottom: 14),
         child: Pair([
@@ -92,16 +115,12 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
               label: text,
               onTap: () => go(AppRoute('chat', {'starter': text})),
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-                decoration: BoxDecoration(
-                  color: palette.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: palette.line),
-                ),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+                decoration: glassBox(palette, radius: 20),
                 child: Column(children: [
-                  ColorIcon(icon: icon, accent: accent, size: 40),
-                  gap(6),
-                  tx(label, color: palette.ink, size: 11, weight: w700, align: TextAlign.center),
+                  ColorIcon(icon: icon, accent: accent, size: 46),
+                  gap(8),
+                  tx(label, color: palette.ink, size: 14, weight: w700, align: TextAlign.center),
                 ]),
               ),
             ),
@@ -136,10 +155,10 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
           onPress: () => go(AppRoute('chat', {'conversationId': item['id']})),
           child: Row(children: [
             Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(12)),
-              child: Icon(Icons.chat_bubble_outline, size: 16, color: palette.primary),
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(14)),
+              child: Icon(Icons.chat_bubble_outline, size: 22, color: palette.green),
             ),
             gap(12),
             Expanded(
@@ -148,7 +167,7 @@ class _TutorScreenState extends State<TutorScreen> with SafeState {
                 tx(_plainPreview(str(item['preview'])), color: palette.muted, lines: 2),
               ]),
             ),
-            Icon(Icons.chevron_right, size: 18, color: palette.muted),
+            Icon(Icons.chevron_right, size: 22, color: palette.ink),
           ]),
         ),
       if (items != null && items!.isEmpty) const Empty(title: 'No conversations yet', body: 'Start a chat with one doubt.'),

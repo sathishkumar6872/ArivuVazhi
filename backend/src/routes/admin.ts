@@ -63,7 +63,7 @@ adminRouter.get(
       Question.countDocuments({ status: "under_review" }),
       Topic.countDocuments({ status: "validation" }),
       Ticket.countDocuments({ status: { $in: ["open", "in_progress"] } }),
-      AiUsage.aggregate([{ $group: { _id: null, tokens: { $sum: "$tokens" }, inr: { $sum: "$estimatedInr" }, requests: { $sum: 1 } } }]),
+      AiUsage.aggregate([{ $group: { _id: null, tokens: { $sum: "$tokens" }, inr: { $sum: { $cond: [{ $eq: ["$provider", "chatgpt"] }, 0, "$estimatedInr"] } } /* ChatGPT account is free under Plus */, requests: { $sum: 1 } } }]),
     ]);
     const [recentStudents, mockSets, flaggedQuestions, settings, currentAffairs] = await Promise.all([
       User.find({ role: "student" }).sort({ updatedAt: -1 }).limit(5).select("firstName lastName email lastActiveDate status").lean(),
@@ -1136,7 +1136,7 @@ adminRouter.get(
       User.countDocuments({ role: "student", status: "active" }),
       PracticeSession.countDocuments(),
       PracticeSession.countDocuments({ status: "completed" }),
-      AiUsage.aggregate([{ $group: { _id: null, inr: { $sum: "$estimatedInr" }, requests: { $sum: 1 } } }]),
+      AiUsage.aggregate([{ $group: { _id: null, inr: { $sum: { $cond: [{ $eq: ["$provider", "chatgpt"] }, 0, "$estimatedInr"] } } /* ChatGPT account is free under Plus */, requests: { $sum: 1 } } }]),
     ]);
     const settings = await AppConfig.findOne({ id: "app" }).lean();
     const [storage, pool] = await Promise.all([databaseUsage(), questionPool()]);

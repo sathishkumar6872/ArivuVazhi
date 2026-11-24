@@ -1,24 +1,41 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../core/api.dart';
 import '../core/app_state.dart';
 import '../core/nav.dart';
+import '../widgets/glass.dart';
 import '../widgets/ui.dart';
 import 'auth_screens.dart' show ExamPicker;
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, required this.user, required this.go, required this.logout});
   final Student user;
   final Go go;
   final Future<void> Function() logout;
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final ScrollController scroll = ScrollController(); // the header band scrolls with the page
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final user = widget.user;
+    final go = widget.go;
     final quick = [
-      ('Analytics', Icons.bar_chart, Accent.red, 'analytics'),
+      ('Analytics', Icons.bar_chart_rounded, Accent.orange, 'analytics'),
       ('Notes', Icons.description, Accent.green, 'notes'),
       ('Bookmarks', Icons.bookmark, Accent.orange, 'bookmarks'),
       ('Achievements', Icons.emoji_events, Accent.purple, 'achievements'),
@@ -32,68 +49,111 @@ class ProfileScreen extends StatelessWidget {
     ];
     final appTamil = user.appLanguage == 'ta';
     final examTamil = user.language == 'ta';
-    return AppScreen(children: [
+    final top = MediaQuery.of(context).padding.top;
+    final screen = AppScreen(controller: scroll, children: [
+      Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          tx(context.t('Profile'), color: Colors.white, size: 28, weight: w800),
+          gap(2),
+          tx(context.t('Manage your account and preferences'), color: const Color(0xFFDCEBFF), size: 14),
+        ]),
+      ),
       HeroCard(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(18),
+        art: HeroArt.profile,
+        margin: const EdgeInsets.only(bottom: 18),
+        padding: const EdgeInsets.fromLTRB(16, 18, 14, 18),
         child: Row(children: [
           Container(
-            width: 68,
-            height: 68,
+            width: 76,
+            height: 76,
             alignment: Alignment.center,
-            decoration: BoxDecoration(color: palette.mint, borderRadius: BorderRadius.circular(22)),
-            child: tx(user.firstName.isNotEmpty ? user.firstName[0] : 'A', color: palette.primary, size: 26, weight: w800),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFF2F8FF), Color(0xFFBFDCFF)],
+              ),
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: const [BoxShadow(color: Color(0x5519BFFF), blurRadius: 16, spreadRadius: -2)],
+            ),
+            child: tx(user.firstName.isNotEmpty ? user.firstName[0].toUpperCase() : 'A',
+                color: const Color(0xFF102A56), size: 30, weight: w800),
           ),
+          gap(14),
+          Container(width: 1, height: 84, color: const Color(0x407DB4FF)),
           gap(14),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              tx('${user.firstName} ${user.lastName}', color: Colors.white, size: 20, weight: w800),
-              gap(2),
-              tx(user.email, color: const Color(0xFFBFE3FF), lines: 1),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: tx('${user.firstName} ${user.lastName}'.trim(), color: Colors.white, size: 19, weight: w800, lines: 2),
+                ),
+                gap(6),
+                Tap(
+                  label: context.t('Edit profile'),
+                  onTap: () => go(AppRoute('editProfile')),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xF2DCEBFF),
+                      borderRadius: BorderRadius.circular(99),
+                      border: Border.all(color: const Color(0x99FFFFFF)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.edit_outlined, size: 15, color: Color(0xFF123B78)),
+                      gap(4),
+                      tx(context.t('Edit Profile'), color: const Color(0xFF123B78), size: 12.5, weight: w800),
+                    ]),
+                  ),
+                ),
+              ]),
+              gap(4),
+              tx(user.email, color: const Color(0xFFDCEBFF), size: 13, lines: 1),
               gap(6),
               tx(
                 '${appTamil ? context.t('Tamil') : context.t('English')} · Exam ${examTamil ? context.t('Tamil') : context.t('English')}',
-                color: palette.highlight,
-                size: 12,
+                color: const Color(0xFF3FD0FF),
+                size: 13,
                 weight: w700,
               ),
             ]),
           ),
-          IconBtn(label: context.t('Edit profile'), icon: Icons.edit_outlined, onPress: () => go(AppRoute('editProfile'))),
         ]),
       ),
-      Padding(padding: const EdgeInsets.only(bottom: 10), child: tx('Quick access', color: palette.primary, weight: w800)),
       Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: GridRows(columns: 4, spacing: 8, runSpacing: 12, children: [
+        padding: const EdgeInsets.only(bottom: 10),
+        child: tx('Quick access', color: palette.primary, size: 19, weight: w800),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: GridRows(columns: 4, spacing: 8, runSpacing: 10, children: [
           for (final (label, icon, accent, route) in quick)
-            Tap(
-              label: label,
-              onTap: () => go(AppRoute(route)),
-              child: Column(children: [
-                ColorIcon(icon: icon, accent: accent, size: 52),
-                gap(6),
-                tx(context.t(label), color: palette.ink, size: 11, weight: w700, align: TextAlign.center),
-              ]),
-            ),
+            IconTile(icon: icon, accent: accent, label: context.t(label), compact: true, onPress: () => go(AppRoute(route))),
         ]),
       ),
       AppCard(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        marginBottom: 12,
+        marginBottom: 14,
         child: Column(children: [
           for (var i = 0; i < rows.length; i++)
             Tap(
               label: rows[i].$1,
               onTap: () => go(AppRoute(rows[i].$3)),
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(border: i > 0 ? Border(top: BorderSide(color: palette.line)) : null),
                 child: Row(children: [
-                  SizedBox(width: 28, child: Icon(rows[i].$2, size: 22, color: palette.ink)),
-                  gap(12),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(color: palette.greenSoft, borderRadius: BorderRadius.circular(12)),
+                    child: Icon(rows[i].$2, size: 21, color: palette.dark ? palette.ink : palette.primary),
+                  ),
+                  gap(14),
                   Expanded(child: tx(context.t(rows[i].$1), color: palette.ink, weight: w700)),
-                  Icon(Icons.chevron_right, size: 18, color: palette.muted),
+                  Icon(Icons.chevron_right, size: 22, color: palette.ink),
                 ]),
               ),
             ),
@@ -108,19 +168,39 @@ class ProfileScreen extends StatelessWidget {
           confirm: 'Logout',
           cancel: 'Stay',
           danger: true,
-          onConfirm: logout,
+          onConfirm: widget.logout,
         )),
         child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(16)),
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(18)),
           child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.power_settings_new, size: 20, color: palette.danger),
+            Icon(Icons.power_settings_new, size: 22, color: palette.danger),
             gap(8),
-            tx(context.t('Logout'), color: palette.danger, weight: w800),
+            tx(context.t('Logout'), color: palette.danger, weight: w800, size: 16),
           ]),
         ),
       ),
     ]);
+    // Navy band behind the title, as on Home; it moves with the list.
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Stack(children: [
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: AnimatedBuilder(
+            animation: scroll,
+            builder: (context, child) => Transform.translate(
+              offset: Offset(0, scroll.hasClients ? -scroll.offset.clamp(0, 2000).toDouble() : 0),
+              child: child,
+            ),
+            child: HeaderBand(height: top + 210),
+          ),
+        ),
+        screen,
+      ]),
+    );
   }
 }
 

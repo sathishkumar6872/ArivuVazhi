@@ -94,7 +94,7 @@ class _ExamsScreenState extends State<ExamsScreen> with SafeState {
             color: current ? palette.greenSoft : null,
             borderColor: current ? palette.green : null,
             child: Row(children: [
-              ColorIcon(icon: Icons.school, accent: current ? Accent.green : accentAt(index + 1)),
+              ColorIcon(icon: Icons.school, accent: current ? Accent.blue : accentAt(index + 1)),
               gap(12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

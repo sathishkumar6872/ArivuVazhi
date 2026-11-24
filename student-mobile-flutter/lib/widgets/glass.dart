@@ -28,6 +28,25 @@ class AppBackground extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
+          if (!palette.dark)
+            IgnorePointer(
+              child: LayoutBuilder(
+                builder: (context, box) => Align(
+                  // Ellipse centre at (450, 720) of 900×1600.
+                  alignment: const Alignment(0, -0.1),
+                  child: Container(
+                    width: box.maxWidth * 1.16,
+                    height: box.maxHeight * 0.625,
+                    decoration: const BoxDecoration(
+                      borderRadius: BorderRadius.all(Radius.elliptical(9999, 9999)),
+                      gradient: RadialGradient(
+                        colors: [Color(0xB3DCEBFF), Color(0x00DCEBFF)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           _Glow(
             color: palette.glowA,
             alignment: const Alignment(-1.3, -1.05),
@@ -173,11 +192,19 @@ class HeroCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(18),
     this.margin = EdgeInsets.zero,
     this.radius = 24,
+    this.art = HeroArt.accuracy,
+    this.border = true,
   });
   final Widget child;
   final EdgeInsets padding;
   final EdgeInsets margin;
   final double radius;
+
+  /// Which of the owner's decorative backgrounds to paint.
+  final HeroArt art;
+
+  /// Cyan hairline (Home and Profile). The AI Tutor hero has none.
+  final bool border;
 
   @override
   Widget build(BuildContext context) {
@@ -187,13 +214,7 @@ class HeroCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [palette.heroStart, palette.heroEnd],
-        ),
-        // The reference uses the same crisp cyan hairline in both themes.
-        border: Border.all(color: const Color(0xFF45CEFF), width: 1),
+        color: palette.heroStart,
         boxShadow: [
           BoxShadow(
             color: palette.dark
@@ -205,10 +226,19 @@ class HeroCard extends StatelessWidget {
           ),
         ],
       ),
+      // Border drawn above the art so it stays even all the way round. Without the cyan
+      // line, a faint white hairline keeps the edge crisp on both themes.
+      foregroundDecoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+          color: border ? const Color(0xB345CEFF) : const Color(0x26FFFFFF),
+          width: border ? 1.2 : 1,
+        ),
+      ),
       child: Stack(
         children: [
-          const Positioned.fill(
-            child: IgnorePointer(child: CustomPaint(painter: _WavePainter())),
+          Positioned.fill(
+            child: IgnorePointer(child: CustomPaint(painter: HeroArtPainter(art))),
           ),
           Padding(padding: padding, child: child),
         ],
@@ -217,50 +247,136 @@ class HeroCard extends StatelessWidget {
   }
 }
 
-/// Two soft light-blue waves rising towards the bottom-right corner.
-class _WavePainter extends CustomPainter {
-  const _WavePainter();
+enum HeroArt { accuracy, tutor, profile }
+
+/// The owner's decorative SVGs (accuracy-banner-bg, ai-tutor-hero-bg, profile-header-bg),
+/// painted natively: diagonal navy gradient, optional soft circle, cyan wave and crest line.
+/// The art is scaled to cover the card and anchored bottom-right so the wave always shows.
+class HeroArtPainter extends CustomPainter {
+  const HeroArtPainter(this.art);
+  final HeroArt art;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-    Path wave(double lift) => Path()
-      ..moveTo(w * 0.35, h)
-      ..cubicTo(
-        w * 0.6,
-        h * (0.86 - lift),
-        w * 0.8,
-        h * (0.98 - lift),
-        w,
-        h * (0.55 - lift),
-      )
-      ..lineTo(w, h)
-      ..close();
-    canvas.drawPath(wave(0.12), Paint()..color = const Color(0x1F19BFFF));
-    canvas.drawPath(
-      wave(0),
+    final (double vw, double vh) = switch (art) {
+      HeroArt.accuracy => (900, 300),
+      HeroArt.tutor => (900, 330),
+      HeroArt.profile => (900, 360),
+    };
+    final bg = switch (art) {
+      HeroArt.accuracy => (const [Color(0xFF092B5A), Color(0xFF104A91), Color(0xFF123E9A)], const [0.0, 0.58, 1.0]),
+      HeroArt.tutor => (const [Color(0xFF082B5A), Color(0xFF0756A8), Color(0xFF164FC0)], const [0.0, 0.55, 1.0]),
+      HeroArt.profile => (const [Color(0xFF092B5A), Color(0xFF1055A5), Color(0xFF1747B9)], const [0.0, 0.55, 1.0]),
+    };
+    final full = Offset.zero & size;
+    canvas.drawRect(
+      full,
       Paint()
-        ..shader = const LinearGradient(
-          colors: [Color(0x0019BFFF), Color(0x8019BFFF)],
-        ).createShader(Rect.fromLTWH(w * 0.35, 0, w * 0.65, h)),
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: bg.$1,
+          stops: bg.$2,
+        ).createShader(full),
     );
-    // Bright crest line along the wave.
-    final crest = Path()
-      ..moveTo(w * 0.35, h)
-      ..cubicTo(w * 0.6, h * 0.86, w * 0.8, h * 0.98, w, h * 0.55);
+
+    final s = math.max(size.width / vw, size.height / vh);
+    canvas.save();
+    canvas.translate(size.width - vw * s, size.height - vh * s);
+    canvas.scale(s);
+
+    switch (art) {
+      case HeroArt.accuracy:
+        _wave(
+          canvas,
+          fill: Path()
+            ..moveTo(320, 300)
+            ..cubicTo(470, 255, 570, 260, 690, 220)
+            ..cubicTo(790, 185, 840, 150, 900, 105)
+            ..lineTo(900, 300)
+            ..close(),
+          fillFrom: 320,
+          from: const Color(0x1A0A6BC7),
+          to: const Color(0xD919BFFF),
+          line: Path()
+            ..moveTo(360, 300)
+            ..cubicTo(510, 265, 620, 270, 735, 225)
+            ..cubicTo(815, 195, 860, 165, 900, 135),
+          lineColor: const Color(0xBF19BFFF),
+          s: s,
+        );
+      case HeroArt.tutor:
+        canvas.drawCircle(const Offset(780, 80), 170, Paint()..color = const Color(0x33168BFF));
+        _wave(
+          canvas,
+          fill: Path()
+            ..moveTo(520, 330)
+            ..cubicTo(620, 270, 680, 300, 760, 230)
+            ..cubicTo(820, 175, 860, 165, 900, 145)
+            ..lineTo(900, 330)
+            ..close(),
+          fillFrom: 520,
+          from: const Color(0x0D0875D8),
+          to: const Color(0xD919BFFF),
+          line: Path()
+            ..moveTo(540, 330)
+            ..cubicTo(650, 285, 700, 300, 785, 245)
+            ..cubicTo(835, 213, 870, 190, 900, 180),
+          lineColor: const Color(0xFF19BFFF),
+          s: s,
+        );
+      case HeroArt.profile:
+        canvas.drawCircle(const Offset(760, 70), 150, Paint()..color = const Color(0x291689E8));
+        _wave(
+          canvas,
+          fill: Path()
+            ..moveTo(430, 360)
+            ..cubicTo(570, 300, 600, 230, 720, 205)
+            ..cubicTo(790, 190, 850, 150, 900, 115)
+            ..lineTo(900, 360)
+            ..close(),
+          fillFrom: 430,
+          from: const Color(0x1A0879D8),
+          to: const Color(0xB319BFFF),
+          line: Path()
+            ..moveTo(470, 360)
+            ..cubicTo(610, 305, 660, 278, 760, 260)
+            ..cubicTo(820, 248, 865, 220, 900, 190),
+          lineColor: const Color(0xB319BFFF),
+          s: s,
+        );
+    }
+    canvas.restore();
+  }
+
+  void _wave(
+    Canvas canvas, {
+    required Path fill,
+    required double fillFrom,
+    required Color from,
+    required Color to,
+    required Path line,
+    required Color lineColor,
+    required double s,
+  }) {
     canvas.drawPath(
-      crest,
+      fill,
+      Paint()
+        ..shader = LinearGradient(colors: [from, to])
+            .createShader(Rect.fromLTRB(fillFrom, 0, 900, 1)),
+    );
+    canvas.drawPath(
+      line,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6
-        ..shader = const LinearGradient(
-          colors: [Color(0x0019BFFF), Color(0xCC5FD3FF)],
-        ).createShader(Rect.fromLTWH(w * 0.35, 0, w * 0.65, h)),
+        // 3 units in the SVG; never thinner than ~1.4 px on screen.
+        ..strokeWidth = math.max(3, 1.4 / s)
+        ..color = lineColor,
     );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(HeroArtPainter old) => old.art != art;
 }
 
 /// Navy band behind the Home greeting. Fades into the page at the bottom.

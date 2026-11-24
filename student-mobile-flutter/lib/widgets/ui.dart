@@ -908,7 +908,7 @@ class Segment extends StatelessWidget {
                     gradient: LinearGradient(
                       colors: palette.dark
                           ? const [Color(0xFF2389E8), Color(0xFF1559B0)]
-                          : const [Color(0xFF123B78), Color(0xFF1769C2)],
+                          : const [Color(0xFF0B2A5C), Color(0xFF123B78)],
                     ),
                     boxShadow: [
                       BoxShadow(
@@ -937,6 +937,7 @@ class Segment extends StatelessWidget {
                                   : palette.muted,
                               fontWeight: w700,
                               fontSize: 13,
+                              fontFamily: headingFont, // AnimatedDefaultTextStyle replaces the theme font
                             ),
                             child: Text(
                               option,
@@ -974,6 +975,7 @@ class ScoreRing extends StatelessWidget {
           size: 148,
           stroke: 12,
           color: palette.accent,
+          gradient: const [Color(0xFF19BFFF), Color(0xFF1769C2)],
           track: palette.line,
           fill: palette.dark ? palette.inset : palette.surface,
           child: Column(
@@ -1148,8 +1150,8 @@ const Map<Accent, Color> accents = {
 };
 
 const _rotation = [
-  Accent.green,
   Accent.blue,
+  Accent.green,
   Accent.orange,
   Accent.red,
   Accent.purple,
@@ -1236,7 +1238,7 @@ class ColorIcon extends StatelessWidget {
   const ColorIcon({
     super.key,
     required this.icon,
-    this.accent = Accent.green,
+    this.accent = Accent.blue,
     this.size = 44,
   });
   final IconData icon;
@@ -1410,7 +1412,7 @@ class IconTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPress,
-    this.accent = Accent.green,
+    this.accent = Accent.blue,
     this.compact = false,
   });
   final IconData icon;
@@ -1502,13 +1504,16 @@ class IconTile extends StatelessWidget {
               ),
             ),
             gap(compact ? 8 : 10),
-            tx(
-              label,
-              color: palette.ink,
-              size: compact ? 12.5 : 13.5,
-              weight: w700,
-              align: TextAlign.center,
-              lines: 1,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: tx(
+                label,
+                color: palette.ink,
+                size: compact ? 12.5 : 13.5,
+                weight: w700,
+                align: TextAlign.center,
+                lines: 1,
+              ),
             ),
           ],
         ),
@@ -1646,11 +1651,7 @@ class SkeletonCards extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: palette.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: palette.line),
-      ),
+      decoration: glassBox(palette, radius: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: children,
@@ -2204,45 +2205,60 @@ class _AiTabButtonState extends State<_AiTabButton>
           child: Stack(
             clipBehavior: Clip.none,
             children: [
+              // floating-ai-glow.svg: soft cyan halo (r118 around a r61 button).
+              Positioned(
+                left: -29,
+                top: -29,
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: 0.8 + 0.2 * t,
+                    child: Container(
+                      width: 118,
+                      height: 118,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [Color(0x6119BFFF), Color(0x001769C2)],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               Container(
                 width: 60,
                 height: 60,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: const RadialGradient(
-                    center: Alignment(-0.3, -0.4),
-                    radius: 0.9,
-                    colors: [Color(0xFF1E5FC0), Color(0xFF0A2457)],
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    stops: [0, 0.55, 1],
+                    colors: [Color(0xFF168DFF), Color(0xFF0754B8), Color(0xFF123B78)],
                   ),
-                  // Light: white ring. Dark: bright blue ring.
+                  // Light: white ring (as in the SVG). Dark: bright blue ring.
                   border: Border.all(
-                    color: palette.dark
-                        ? const Color(0xFF4FA8FF)
-                        : Colors.white,
+                    color: palette.dark ? const Color(0xFF4FA8FF) : Colors.white,
                     width: 3,
                   ),
                   boxShadow: [
-                    // Blue glow grows and softens as the button rises.
                     BoxShadow(
-                      color: const Color(0xFF1769C2)
-                          .withAlpha((0x66 + 0x33 * t).round()),
-                      blurRadius: 18 + 10 * t,
-                      offset: Offset(0, 8 + 3 * t),
+                      color: const Color(0xFF1769C2).withAlpha((0x55 + 0x22 * t).round()),
+                      blurRadius: 14 + 6 * t,
+                      offset: Offset(0, 6 + 2 * t),
                       spreadRadius: -2,
                     ),
                   ],
                 ),
                 child: child,
               ),
-              // Small sparkles above the button.
+              // The SVG's two four-point sparkles, top right.
               const Positioned(
+                left: 0,
                 top: 0,
-                right: -4,
-                child: Icon(
-                  Icons.auto_awesome,
-                  size: 14,
-                  color: Color(0xFF19BFFF),
+                child: IgnorePointer(
+                  child: CustomPaint(size: Size(60, 60), painter: _SparklePainter()),
                 ),
               ),
             ],
@@ -2252,6 +2268,37 @@ class _AiTabButtonState extends State<_AiTabButton>
       child: tx('AI', color: Colors.white, size: 17, weight: w900),
     );
   }
+}
+
+/// Two cyan four-point stars from floating-ai-glow.svg, in the button's 60×60 box.
+class _SparklePainter extends CustomPainter {
+  const _SparklePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = const Color(0xFF19BFFF);
+    void star(Offset c, double r, double inner) {
+      canvas.drawPath(
+        Path()
+          ..moveTo(c.dx, c.dy - r)
+          ..lineTo(c.dx + inner, c.dy - inner)
+          ..lineTo(c.dx + r, c.dy)
+          ..lineTo(c.dx + inner, c.dy + inner)
+          ..lineTo(c.dx, c.dy + r)
+          ..lineTo(c.dx - inner, c.dy + inner)
+          ..lineTo(c.dx - r, c.dy)
+          ..lineTo(c.dx - inner, c.dy - inner)
+          ..close(),
+        paint,
+      );
+    }
+
+    star(const Offset(58, -2), 8.5, 2.5);
+    star(const Offset(69, 8), 5, 1.5);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _TabItem extends StatelessWidget {
@@ -2470,7 +2517,9 @@ class SwitchRow extends StatelessWidget {
               activeThumbColor: Colors.white,
               activeTrackColor: palette.green,
               inactiveThumbColor: palette.surface,
-              inactiveTrackColor: palette.line,
+              // Light: soft blue-grey track with no dark outline (the default looked harsh).
+              inactiveTrackColor: palette.dark ? palette.line : const Color(0xFFD3DEEC),
+              trackOutlineColor: palette.dark ? null : const WidgetStatePropertyAll(Colors.transparent),
             ),
           ),
         ],
