@@ -59,16 +59,15 @@ class CurrentAffairsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     return AppCard(
-      marginTop: 8,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       borderColor: palette.dark
           ? const Color(0xFF6F8DAA)
           : const Color(0xFFF6F9FD),
       onPress: () => go(AppRoute('currentAffairs')),
       child: Row(
         children: [
-          const BrandIcon(icon: Icons.event_note_rounded, size: 42),
-          gap(12),
+          const BrandIcon(icon: Icons.event_note_rounded, size: 44),
+          gap(14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

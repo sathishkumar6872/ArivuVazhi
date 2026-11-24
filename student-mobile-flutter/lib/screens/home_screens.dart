@@ -166,7 +166,7 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
       topPadding: 0,
       children: [
         Padding(
-          padding: const EdgeInsets.only(bottom: 2),
+          padding: const EdgeInsets.only(top: 14, bottom: 16),
           child: Row(
             children: [
               Expanded(
@@ -274,7 +274,7 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
           const Loading(variant: LoadingVariant.home),
         if (ready) ...[
           HeroCard(
-            margin: const EdgeInsets.only(top: 2, bottom: 10),
+            margin: const EdgeInsets.only(bottom: 22),
             child: Row(
               children: [
                 RingGauge(
@@ -342,17 +342,16 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
             ),
           ),
           AppCard(
-            marginTop: 8,
-            marginBottom: 4,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            marginBottom: 14,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
             borderColor: palette.dark
                 ? const Color(0xFF6F8DAA)
                 : const Color(0xFFF6F9FD),
             onPress: () => go(AppRoute('exams')),
             child: Row(
               children: [
-                const BrandIcon(icon: Icons.school_rounded, size: 42),
-                gap(12),
+                const BrandIcon(icon: Icons.school_rounded, size: 44),
+                gap(14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,7 +413,7 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
               ),
             ),
           Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            padding: const EdgeInsets.only(top: 14, bottom: 10),
             child: tx(
               'Quick actions',
               color: palette.primary,
@@ -424,7 +423,8 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
           ),
           GridRows(
             columns: 3,
-            spacing: 8,
+            spacing: 10,
+            runSpacing: 11,
             children: [
               IconTile(
                 compact: true,
@@ -471,7 +471,7 @@ class _HomeScreenState extends State<HomeScreen> with SafeState {
             ],
           ),
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
