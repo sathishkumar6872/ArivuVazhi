@@ -36,7 +36,7 @@ import {
 import { getGeminiSettings, testGeminiConnection } from "../gemini-settings.js";
 import { getOpenAiSettings, testOpenAiConnection } from "../openai-settings.js";
 import { fetchExamSubjectsWithAi, fetchSubjectTopicsWithAi } from "../syllabus-ai.js";
-import { dailyMockJobStatus, getDailyMockRun, startDailyMockJob } from "../jobs.js";
+import { autoReviewStatus, dailyMockJobStatus, getDailyMockRun, startAutoReview, startDailyMockJob } from "../jobs.js";
 import { currentAffairsStatus, runNightly } from "../current-affairs.js";
 import { canTransitionExam, allowedExamTransitions, escapeRegex, EXAM_LIFECYCLES, planSyllabusMerge } from "../governance.js";
 
@@ -684,31 +684,66 @@ adminRouter.patch(
 
 adminRouter.get(
   "/approvals",
-  wrap(async (_req, res) => {
-    const [questions, subjects, topics, sources, papers] = await Promise.all([
-      Question.find({ $or: [{ status: "under_review" }, { flagged: true }] }).sort({ flagged: -1, "stats.answered": -1, createdAt: 1 }).limit(30).lean(),
-      Subject.find({ status: "validation" }).limit(30).lean(),
-      Topic.find({ status: "validation" }).limit(30).lean(),
-      KnowledgeSource.find({ status: { $in: ["draft", "under_review"] } }).limit(30).lean(),
-      PyqPaper.find({ status: "under_review" }).limit(30).lean(),
+  wrap(async (req, res) => {
+    const { page, limit, skip } = pageQuery(req.query);
+    const questionFilter = { $or: [{ status: "under_review" }, { flagged: true }] };
+    // Papers, subjects, topics and sources are few and always need a person: they come first.
+    const [subjects, topics, sources, papers, questionTotal, auto] = await Promise.all([
+      Subject.find({ status: "validation" }).limit(200).lean(),
+      Topic.find({ status: "validation" }).limit(200).lean(),
+      KnowledgeSource.find({ status: { $in: ["draft", "under_review"] } }).limit(200).lean(),
+      PyqPaper.find({ status: "under_review" }).limit(200).lean(),
+      Question.countDocuments(questionFilter),
+      autoReviewStatus(),
     ]);
+    const others = [
+      ...papers.map((item) => ({ type: "pyq", id: item.id, title: item.title, status: item.status, rightsStatus: item.rightsStatus })),
+      ...subjects.map((item) => ({ type: "subject", id: item.id, title: item.nameEn || item.name, status: item.status })),
+      ...topics.map((item) => ({ type: "topic", id: item.id, title: item.nameEn || item.name, status: item.status })),
+      ...sources.map((item) => ({ type: "source", id: item.id, title: item.title, status: item.status })),
+    ];
+    const fromOthers = others.slice(skip, skip + limit);
+    const questionLimit = limit - fromOthers.length;
+    const questions = questionLimit
+      ? await Question.find(questionFilter)
+          .sort({ flagged: -1, "stats.answered": -1, createdAt: 1 })
+          .skip(Math.max(0, skip - others.length))
+          .limit(questionLimit)
+          .lean()
+      : [];
+    const total = others.length + questionTotal;
     res.json({
-      data: [
-        ...questions.map((item) => ({
-          type: "question",
-          id: item.id,
-          title: item.stem.slice(0, 120),
-          status: item.flagged ? "flagged" : item.status,
-          note: item.flagReason || "",
-          answered: item.stats?.answered || 0,
-          reports: item.reportCount || 0,
-        })),
-        ...subjects.map((item) => ({ type: "subject", id: item.id, title: item.nameEn || item.name, status: item.status })),
-        ...topics.map((item) => ({ type: "topic", id: item.id, title: item.nameEn || item.name, status: item.status })),
-        ...sources.map((item) => ({ type: "source", id: item.id, title: item.title, status: item.status })),
-        ...papers.map((item) => ({ type: "pyq", id: item.id, title: item.title, status: item.status, rightsStatus: item.rightsStatus })),
-      ],
+      data: {
+        items: [
+          ...fromOthers,
+          ...questions.map((item) => ({
+            type: "question",
+            id: item.id,
+            title: item.stem.slice(0, 120),
+            status: item.flagged ? "flagged" : item.status,
+            source: item.source || "",
+            note: item.flagReason || "",
+            answered: item.stats?.answered || 0,
+            reports: item.reportCount || 0,
+          })),
+        ],
+        page,
+        limit,
+        total,
+        pages: Math.max(1, Math.ceil(total / limit)),
+        autoReview: auto,
+      },
     });
+  }),
+);
+
+/** Admin "Auto review": AI checks up to 200 waiting questions in the background. */
+adminRouter.post(
+  "/approvals/auto-review",
+  wrap(async (req, res) => {
+    const status = await startAutoReview(200);
+    await audit(req.user!.id, "approval_auto_review", "question", "", { total: status.total });
+    res.json({ data: status });
   }),
 );
 

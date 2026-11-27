@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { dayKey, nid } from "./http.js";
+import { HttpError, dayKey, nid } from "./http.js";
 import { nextIstRun, stemKey } from "./governance.js";
 import { Bookmark, DailyMockSet, Exam, JobLock, JobRun, MockAttempt, MockTest, PracticeSession, Question, QuestionReport, QuestionSeen, User } from "./models.js";
 import { ensureDailyMock, generateDailyMockSet } from "./daily-mock.js";
@@ -302,13 +302,70 @@ export async function cleanupOldData(now = new Date()) {
 
 /** AI-check up to `limit` AI questions still waiting for review (oldest first). */
 export async function reviewBacklog(limit = 200) {
-  const pending = await Question.find({ status: "under_review", reviewedBy: "", flagReason: "", flagged: { $ne: true }, source: { $in: ["student_ai", "daily_mock"] } })
+  const pending = await Question.find({
+    status: "under_review",
+    reviewedBy: { $in: ["", null] },
+    flagReason: { $in: ["", null] },
+    flagged: { $ne: true },
+    source: { $in: ["student_ai", "daily_mock"] },
+  })
     .sort({ createdAt: 1 })
     .limit(limit)
     .select("id")
     .lean();
   if (!pending.length) return 0;
   return autoReviewQuestions(pending.map((row) => row.id));
+}
+
+/**
+ * Questions the admin "Auto review" button may check: waiting, never reviewed, and with no
+ * problem note — except a PYQ's "No official answer yet", which the AI answer check covers.
+ * Duplicates, unreadable scans, figure questions and earlier AI failures stay for a person.
+ */
+export const autoReviewFilter = {
+  status: "under_review",
+  flagged: { $ne: true },
+  reviewedBy: { $in: ["", null] },
+  $or: [{ flagReason: { $in: ["", null] } }, { flagReason: "No official answer yet" }],
+};
+
+type AutoReviewState = {
+  running: boolean;
+  total: number;
+  done: number;
+  passed: number;
+  failed: number;
+  startedAt: string;
+  finishedAt: string;
+  error: string;
+};
+let autoReview: AutoReviewState = { running: false, total: 0, done: 0, passed: 0, failed: 0, startedAt: "", finishedAt: "", error: "" };
+
+export async function autoReviewStatus() {
+  return { ...autoReview, waiting: await Question.countDocuments(autoReviewFilter) };
+}
+
+/** Starts an AI check of up to `limit` waiting questions in the background (oldest first). */
+export async function startAutoReview(limit = 200) {
+  if (autoReview.running) throw new HttpError(409, "Auto review is already running.", "CONFLICT");
+  const ids = (await Question.find(autoReviewFilter).sort({ createdAt: 1 }).limit(limit).select("id").lean()).map((row) => row.id);
+  const now = new Date().toISOString();
+  autoReview = { running: ids.length > 0, total: ids.length, done: 0, passed: 0, failed: 0, startedAt: now, finishedAt: ids.length ? "" : now, error: "" };
+  if (ids.length) {
+    void autoReviewQuestions(ids, ({ passed, failed }) => {
+      autoReview.done += passed + failed;
+      autoReview.passed += passed;
+      autoReview.failed += failed;
+    })
+      .catch((error) => {
+        autoReview.error = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        autoReview.running = false;
+        autoReview.finishedAt = new Date().toISOString();
+      });
+  }
+  return autoReviewStatus();
 }
 
 /**

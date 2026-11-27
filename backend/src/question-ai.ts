@@ -641,8 +641,12 @@ Return ONLY JSON: {"results":[{"index":0,"ok":true,"reason":""}]}. Give a short 
  * Auto-approve: questions that pass the AI answer check are published to the exam's
  * shared pool; the rest stay under review for an admin (and only their student sees them).
  */
-export async function autoReviewQuestions(ids: string[]) {
-  const pending = await Question.find({ id: { $in: ids }, status: "under_review", reviewedBy: "" }).lean();
+export async function autoReviewQuestions(
+  ids: string[],
+  onBatch?: (result: { passed: number; failed: number }) => void,
+) {
+  // Older questions have no reviewedBy at all; treat missing the same as "".
+  const pending = await Question.find({ id: { $in: ids }, status: "under_review", reviewedBy: { $in: ["", null] } }).lean();
   for (let at = 0; at < pending.length; at += 10) {
     const batch = pending.slice(at, at + 10);
     const { verdicts } = await checkMcqs(batch);
@@ -651,13 +655,25 @@ export async function autoReviewQuestions(ids: string[]) {
       await Question.updateMany({ id: { $in: passed }, status: "under_review" }, { $set: { status: "published", reviewedBy: "auto" } });
     }
     // Failed ones keep their reason for the admin; they stay visible only to their own student.
+    // An existing note (e.g. a PYQ's "No official answer yet") is kept after the AI reason.
     await Promise.all(
       batch.map((question, index) =>
         verdicts[index].ok
           ? null
-          : Question.updateOne({ id: question.id }, { $set: { flagReason: `AI check: ${verdicts[index].reason || "failed"}`.slice(0, 300) } }),
+          : Question.updateOne(
+              { id: question.id },
+              {
+                $set: {
+                  flagReason: [`AI check: ${verdicts[index].reason || "failed"}`.slice(0, 240), question.flagReason || ""]
+                    .filter(Boolean)
+                    .join(" · ")
+                    .slice(0, 300),
+                },
+              },
+            ),
       ),
     );
+    onBatch?.({ passed: passed.length, failed: batch.length - passed.length });
   }
   return pending.length;
 }
