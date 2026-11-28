@@ -280,7 +280,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       case 'planner':
         return PlannerScreen(back: back);
       case 'analytics':
-        return AnalyticsScreen(back: back);
+        return AnalyticsScreen(back: back, go: push);
       case 'alerts':
         return AlertsScreen(back: back);
       case 'mocks':

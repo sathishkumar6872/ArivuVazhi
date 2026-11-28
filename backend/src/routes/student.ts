@@ -281,29 +281,57 @@ studentRouter.get(
       ? await Question.find({ id: { $in: answeredIds } }).select("id subjectId topicId difficulty").lean()
       : [];
     const questionMap = new Map(questions.map((question) => [question.id, question]));
-    const subjects = await Subject.find({ id: { $in: [...new Set(questions.map((question) => question.subjectId))] } })
-      .select("id name nameEn")
-      .lean();
+    const [subjects, topics] = await Promise.all([
+      Subject.find({ id: { $in: [...new Set(questions.map((question) => question.subjectId))] } })
+        .select("id name nameEn")
+        .lean(),
+      Topic.find({ id: { $in: [...new Set(questions.map((question) => question.topicId))] } })
+        .select("id name nameEn examId subjectId")
+        .lean(),
+    ]);
     const subjectName = new Map(subjects.map((subject) => [subject.id, subject.nameEn || subject.name]));
+    const topicInfo = new Map(topics.map((topic) => [topic.id, topic]));
     let correct = 0;
     let total = 0;
-    const bySubject = new Map<string, { name: string; correct: number; total: number }>();
+    type Tally = { correct: number; total: number };
+    const bySubject = new Map<string, Tally & { topics: Map<string, Tally> }>();
     const activeDays = new Set<string>();
-    const since = Date.now() - 28 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    const since = now - 28 * DAY;
+    // Last 7 days vs the 7 before, for the "improving" line.
+    const thisWeek: Tally = { correct: 0, total: 0 };
+    const lastWeek: Tally = { correct: 0, total: 0 };
     for (const session of sessions) {
       if (session.completedAt && new Date(session.completedAt).getTime() >= since) activeDays.add(dayKey(new Date(session.completedAt)));
       for (const answer of session.answers) {
         total += 1;
         if (answer.correct) correct += 1;
+        const at = new Date(answer.answeredAt || session.completedAt || 0).getTime();
+        const week = at >= now - 7 * DAY ? thisWeek : at >= now - 14 * DAY ? lastWeek : null;
+        if (week) {
+          week.total += 1;
+          if (answer.correct) week.correct += 1;
+        }
         const question = questionMap.get(answer.questionId);
-        if (!question) continue;
-        const name = subjectName.get(question.subjectId) || "Subject";
-        const bucket = bySubject.get(question.subjectId) || { name, correct: 0, total: 0 };
+        // Subjects that were removed are left out of the split (they still count in overall accuracy).
+        if (!question || !subjectName.has(question.subjectId)) continue;
+        const bucket = bySubject.get(question.subjectId) || { correct: 0, total: 0, topics: new Map<string, Tally>() };
         bucket.total += 1;
         if (answer.correct) bucket.correct += 1;
+        if (topicInfo.has(question.topicId)) {
+          const topic = bucket.topics.get(question.topicId) || { correct: 0, total: 0 };
+          topic.total += 1;
+          if (answer.correct) topic.correct += 1;
+          bucket.topics.set(question.topicId, topic);
+        }
         bySubject.set(question.subjectId, bucket);
       }
     }
+    const percent = (tally: Tally) => (tally.total ? Math.round((tally.correct / tally.total) * 100) : 0);
+    // Too few answers say little: no strong/focus label until there is enough practice.
+    const band = (tally: Tally, minimum: number) =>
+      tally.total < minimum ? "more_practice" : percent(tally) >= 75 ? "strong" : percent(tally) >= 50 ? "improving" : "focus";
     // Syllabus progress = average Easy -> Medium -> Hard standing over the exam's topics.
     const levels = examId ? await topicProgress(owner(req), examId) : new Map();
     const studiedTopics = examTopics.filter((topic) => (levels.get(topic.id)?.step || 0) >= 1);
@@ -331,11 +359,31 @@ studentRouter.get(
           maxScore: attempt.maxScore,
           percent: attempt.maxScore ? Math.round(((attempt.rawScore || 0) / attempt.maxScore) * 100) : 0,
         })),
-        subjects: [...bySubject.values()].map((subject) => ({
-          name: subject.name,
-          accuracy: subject.total ? Math.round((subject.correct / subject.total) * 100) : 0,
-          attempted: subject.total,
-        })),
+        weekly: {
+          thisWeek: { attempted: thisWeek.total, accuracy: percent(thisWeek) },
+          lastWeek: { attempted: lastWeek.total, accuracy: percent(lastWeek) },
+        },
+        subjects: [...bySubject.entries()]
+          .map(([subjectId, subject]) => ({
+            id: subjectId,
+            name: subjectName.get(subjectId) || "",
+            accuracy: percent(subject),
+            attempted: subject.total,
+            /** strong (75%+) · improving (50–74%) · focus (<50%) · more_practice (under 10 answers) */
+            band: band(subject, 10),
+            topics: [...subject.topics.entries()]
+              .map(([topicId, topic]) => ({
+                id: topicId,
+                name: topicInfo.get(topicId)!.nameEn || topicInfo.get(topicId)!.name,
+                examId: topicInfo.get(topicId)!.examId,
+                accuracy: percent(topic),
+                attempted: topic.total,
+                band: band(topic, 5),
+              }))
+              // Weakest first, so the topics to work on are on top.
+              .sort((a, b) => a.accuracy - b.accuracy || b.attempted - a.attempted),
+          }))
+          .sort((a, b) => b.attempted - a.attempted),
       },
     });
   }),

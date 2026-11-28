@@ -839,8 +839,9 @@ class _PlannerScreenState extends State<PlannerScreen> with SafeState {
 }
 
 class AnalyticsScreen extends StatefulWidget {
-  const AnalyticsScreen({super.key, required this.back});
+  const AnalyticsScreen({super.key, required this.back, required this.go});
   final VoidCallback back;
+  final void Function(AppRoute) go;
 
   @override
   State<AnalyticsScreen> createState() => _AnalyticsScreenState();
@@ -904,6 +905,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
         if (data == null && error.isEmpty)
           const Loading(variant: LoadingVariant.home),
         if (data != null) ...[
+          _SummaryCard(data: data!),
           ScoreRing(
             value: numOf(data!['accuracy']),
             caption: str(data!['readiness']).isNotEmpty
@@ -981,53 +983,28 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 4),
             child: tx('Subjects', color: palette.ink, size: 18, weight: w800),
           ),
-          for (final subject in subjects)
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: tx(
-                          str(subject['name']),
-                          color: palette.ink,
-                          weight: w700,
-                        ),
-                      ),
-                      tx(
-                        '${subject['accuracy']}%',
-                        color: palette.green,
-                        weight: w800,
-                      ),
-                    ],
-                  ),
-                  ProgressBar(value: numOf(subject['accuracy'])),
-                  tx('${subject['attempted']} attempted', color: palette.muted),
-                ],
+          if (subjects.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: tx(
+                'Tap a subject to see its topics and practise the ones that need you.',
+                color: palette.muted,
+                size: 13,
               ),
             ),
-          if (subjects.isNotEmpty)
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  tx('Strengths and focus', color: palette.ink, weight: w800),
-                  gap(6),
-                  tx(
-                    'Stronger: ${_names(subjects.where((s) => numOf(s['accuracy']) >= 60), 'none yet')}',
-                    color: palette.muted,
-                  ),
-                  gap(4),
-                  tx(
-                    'Focus next: ${_names(subjects.where((s) => numOf(s['accuracy']) < 60), 'none below 60%')}',
-                    color: palette.muted,
-                  ),
-                ],
+          for (var i = 0; i < subjects.length; i++)
+            _SubjectCard(
+              subject: subjects[i],
+              index: i,
+              onPractice: (topic) => widget.go(
+                AppRoute('quiz', {
+                  'examId': topic['examId'],
+                  'topicId': topic['id'],
+                  'title': topic['name'],
+                }),
               ),
             ),
           if (subjects.isEmpty)
@@ -1044,20 +1021,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
               weight: w700,
             ),
           ),
-          for (final session in history.take(6))
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  tx(
-                    '${session['correct']}/${session['total']} correct',
-                    color: palette.ink,
-                    weight: w700,
-                  ),
-                  tx(str(session['status']), color: palette.muted),
-                ],
-              ),
-            ),
+          // Sets left with nothing answered say nothing; leave them out.
+          for (final session in history
+              .where((s) => numOf(s['answered']) > 0 || str(s['status']) == 'active')
+              .take(6))
+            _RecentPracticeCard(session: session),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: tx(
@@ -1094,9 +1062,339 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
     );
   }
 
-  String _names(Iterable<dynamic> subjects, String fallback) {
-    final names = subjects.map((s) => str(s['name'])).join(', ');
-    return names.isEmpty ? fallback : names;
+}
+
+const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/// "Today", "Yesterday" or "26 Nov", in India time.
+String _dayLabel(String stamp) {
+  final parsed = DateTime.tryParse(stamp);
+  if (parsed == null) return '';
+  final ist = parsed.toUtc().add(const Duration(hours: 5, minutes: 30));
+  final key = '${ist.year}-${ist.month.toString().padLeft(2, '0')}-${ist.day.toString().padLeft(2, '0')}';
+  final today = todayKey();
+  if (key == today) return 'Today';
+  if (key == shiftDay(today, -1)) return 'Yesterday';
+  return '${ist.day} ${_months[ist.month - 1]}';
+}
+
+/// One practice set: what it was (subject · topic), when, level and score.
+class _RecentPracticeCard extends StatelessWidget {
+  const _RecentPracticeCard({required this.session});
+  final dynamic session;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final subject = str(session['subjectName']);
+    final topic = str(session['topicName']);
+    final kind = str(session['kind']);
+    final status = str(session['status']);
+    final title = topic.isNotEmpty
+        ? topic
+        : kind == 'retry'
+            ? 'Retry of mistakes'
+            : 'Quick practice';
+    final (icon, accent) = subject.isNotEmpty
+        ? subjectVisual(subject)
+        : (Icons.bolt, Accent.blue);
+    final level = str(session['difficulty']);
+    final when = _dayLabel(str(session['completedAt'] ?? session['startedAt']));
+    // Date first so a long subject name never cuts it off.
+    final details = [
+      if (when.isNotEmpty) when,
+      if (level.isNotEmpty) '${level[0].toUpperCase()}${level.substring(1)}',
+      if (subject.isNotEmpty) subject,
+    ].join(' · ');
+    final correct = numOf(session['correct']);
+    final answered = numOf(session['answered']);
+    final total = numOf(session['total']);
+    final done = status == 'completed';
+    final band = !done || answered == 0
+        ? 'more_practice'
+        : correct / answered >= 0.75
+            ? 'strong'
+            : correct / answered >= 0.5
+                ? 'improving'
+                : 'focus';
+    final (_, base, _) = _bandStyle(band);
+    final scoreColor = palette.dark ? Color.lerp(base, Colors.white, 0.35)! : base;
+    return AppCard(
+      child: Row(
+        children: [
+          ColorIcon(icon: icon, accent: accent, size: 40),
+          gap(12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                tx(title, color: palette.ink, weight: w700, lines: 2),
+                if (details.isNotEmpty) tx(details, color: palette.muted, size: 12, lines: 1),
+              ],
+            ),
+          ),
+          gap(8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              tx(
+                done ? '$correct/$total' : '$answered/$total',
+                color: done ? scoreColor : palette.ink,
+                size: 16,
+                weight: w800,
+              ),
+              tx(
+                done ? 'correct' : status == 'active' ? 'in progress' : 'not finished',
+                color: palette.muted,
+                size: 11,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Strong / Improving / Focus here / Need more practice: colour, label and icon.
+/// Calm colours on purpose (no red): the screen should guide, not scare.
+(String, Color, IconData) _bandStyle(String band) => switch (band) {
+  'strong' => ('Strong', const Color(0xFF16A34A), Icons.check_circle),
+  'improving' => ('Improving', const Color(0xFFD97706), Icons.trending_up),
+  'focus' => ('Focus here', const Color(0xFF1769C2), Icons.center_focus_strong),
+  _ => ('Need more practice', const Color(0xFF64748B), Icons.more_horiz),
+};
+
+class _BandPill extends StatelessWidget {
+  const _BandPill({required this.band});
+  final String band;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, base, icon) = _bandStyle(band);
+    final dark = context.palette.dark;
+    // Lighter text on dark cards so the label stays readable.
+    final color = dark ? Color.lerp(base, Colors.white, 0.35)! : base;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: base.withAlpha(dark ? 0x33 : 0x1F),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          tx(label, color: color, size: 11.5, weight: w700),
+        ],
+      ),
+    );
+  }
+}
+
+/// One plain-language line on how the student is doing, then where to go next.
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final subjects = asList(data['subjects']);
+    final weekly = asMap(data['weekly']);
+    final now = asMap(weekly['thisWeek']);
+    final before = asMap(weekly['lastWeek']);
+    final nowCount = numOf(now['attempted']);
+    final beforeCount = numOf(before['attempted']);
+    final diff = numOf(now['accuracy']) - numOf(before['accuracy']);
+
+    String headline;
+    if (numOf(data['attempted']) == 0) {
+      headline = 'Welcome! Finish your first practice set and your progress will show up here.';
+    } else if (nowCount >= 5 && beforeCount >= 5 && diff > 0) {
+      headline = 'Great work! Your correct answers went up by $diff% this week.';
+    } else if (nowCount >= 5 && beforeCount >= 5 && diff < 0) {
+      headline = 'A tougher week, and that is normal. A little practice will bring it back up.';
+    } else if (nowCount > 0) {
+      headline = 'You answered $nowCount questions this week. Keep the habit going!';
+    } else {
+      headline = 'No practice this week yet. A quick set of 5 questions is a good start.';
+    }
+
+    String names(String band) => subjects
+        .where((s) => str(s['band']) == band)
+        .map((s) => str(s['name']))
+        .take(2)
+        .join(' and ');
+    final strong = names('strong');
+    final focus = names('focus').isNotEmpty ? names('focus') : names('improving');
+    final next = [
+      if (strong.isNotEmpty) 'You are strong in $strong.',
+      if (focus.isNotEmpty) 'Spend a little time on $focus next.',
+    ].join(' ');
+
+    return AppCard(
+      padding: const EdgeInsets.all(16),
+      marginBottom: 14,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const ColorIcon(icon: Icons.emoji_objects_outlined, accent: Accent.blue, size: 42),
+          gap(12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                tx(headline, color: palette.ink, size: 15, weight: w700, lineHeight: 21),
+                if (next.isNotEmpty) ...[
+                  gap(6),
+                  tx(next, color: palette.muted, size: 13.5, lineHeight: 19),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Subject accuracy with its band; tap to open the topic list (weakest first).
+class _SubjectCard extends StatefulWidget {
+  const _SubjectCard({required this.subject, required this.index, required this.onPractice});
+  final dynamic subject;
+  final int index;
+  final void Function(dynamic topic) onPractice;
+
+  @override
+  State<_SubjectCard> createState() => _SubjectCardState();
+}
+
+class _SubjectCardState extends State<_SubjectCard> {
+  bool open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final subject = widget.subject;
+    final topics = asList(subject['topics']);
+    final (icon, accent) = subjectVisual(str(subject['name']), widget.index);
+    final enough = str(subject['band']) != 'more_practice';
+    return AppCard(
+      onPress: topics.isEmpty ? null : () => setState(() => open = !open),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ColorIcon(icon: icon, accent: accent, size: 40),
+              gap(12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    tx(str(subject['name']), color: palette.ink, weight: w700, lines: 2),
+                    gap(4),
+                    _BandPill(band: str(subject['band'])),
+                  ],
+                ),
+              ),
+              gap(8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  tx(
+                    enough ? '${subject['accuracy']}%' : '${subject['attempted']} Qs',
+                    color: palette.ink,
+                    size: 17,
+                    weight: w800,
+                  ),
+                  tx(enough ? 'correct' : 'answered', color: palette.muted, size: 11),
+                ],
+              ),
+              if (topics.isNotEmpty)
+                Icon(open ? Icons.expand_less : Icons.expand_more, color: palette.muted),
+            ],
+          ),
+          if (enough) ProgressBar(value: numOf(subject['accuracy'])),
+          gap(6),
+          tx(
+            enough
+                ? '${subject['attempted']} questions answered'
+                : 'Answer at least 10 questions to see how strong you are here.',
+            color: palette.muted,
+            size: 12,
+          ),
+          if (open) ...[
+            gap(10),
+            Divider(height: 1, color: palette.line),
+            for (final topic in topics) _TopicRow(topic: topic, onPractice: () => widget.onPractice(topic)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TopicRow extends StatelessWidget {
+  const _TopicRow({required this.topic, required this.onPractice});
+  final dynamic topic;
+  final VoidCallback onPractice;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final band = str(topic['band']);
+    final (_, color, _) = _bandStyle(band);
+    final enough = band != 'more_practice';
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          gap(10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                tx(str(topic['name']), color: palette.ink, size: 13.5, weight: w600, lines: 2),
+                tx(
+                  enough
+                      ? '${topic['accuracy']}% correct · ${_bandStyle(band).$1}'
+                      : '${topic['attempted']} answered · practise a few more',
+                  color: palette.muted,
+                  size: 11.5,
+                ),
+              ],
+            ),
+          ),
+          if (band != 'strong')
+            Tap(
+              onTap: onPractice,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: palette.dark ? const Color(0x331769C2) : const Color(0xFFEAF2FD),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                child: tx(
+                  'Practice',
+                  color: palette.dark ? const Color(0xFF8CC4FF) : const Color(0xFF1769C2),
+                  size: 12,
+                  weight: w700,
+                ),
+              ),
+            )
+          else
+            Icon(Icons.check_circle, size: 18, color: color),
+        ],
+      ),
+    );
   }
 }
 

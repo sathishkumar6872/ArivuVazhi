@@ -28,6 +28,7 @@ import {
   PyqPaper,
   Question,
   QuestionReport,
+  Subject,
   SyncReceipt,
   Topic,
   User,
@@ -417,7 +418,20 @@ learningRouter.get(
   "/practice/history",
   wrap(async (req, res) => {
     const sessions = await PracticeSession.find({ studentId: studentId(req) }).sort({ createdAt: -1 }).limit(30).lean();
-    const names = await topicNames(sessions.map((session) => session.topicId), req.user!.language === "ta" ? "ta" : "en");
+    const language = req.user!.language === "ta" ? "ta" : "en";
+    const names = await topicNames(sessions.map((session) => session.topicId), language);
+    // Subject of each session's topic, so the app can say "Polity · Fundamental Rights".
+    const topicSubject = new Map(
+      (await Topic.find({ id: { $in: [...new Set(sessions.map((session) => session.topicId).filter(Boolean))] } }).select("id subjectId").lean()).map(
+        (topic) => [topic.id, topic.subjectId],
+      ),
+    );
+    const subjects = await Subject.find({ id: { $in: [...new Set(topicSubject.values())] } })
+      .select("id name nameEn nameTa")
+      .lean();
+    const subjectName = new Map(
+      subjects.map((subject) => [subject.id, (language === "ta" ? subject.nameTa : subject.nameEn) || subject.name]),
+    );
     res.json({
       data: sessions.map((session) => ({
         id: session.id,
@@ -432,6 +446,7 @@ learningRouter.get(
         correct: session.answers.filter((answer) => answer.correct).length,
         startedAt: session.startedAt,
         completedAt: session.completedAt,
+        subjectName: subjectName.get(topicSubject.get(session.topicId) || "") || "",
       })),
     });
   }),
