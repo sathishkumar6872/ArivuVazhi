@@ -850,20 +850,16 @@ class AnalyticsScreen extends StatefulWidget {
 class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
   Map<String, dynamic>? data;
   List<dynamic> history = [];
-  List<dynamic> mocks = [];
   String error = '';
 
   @override
   void initState() {
     super.initState();
-    Future.wait([api('/analytics'), api('/practice/history'), api('/mocks')])
+    Future.wait([api('/analytics'), api('/practice/history')])
         .then((results) {
           safe(() {
             data = asMap(results[0]);
             history = asList(results[1]);
-            mocks = asList(results[2])
-                .where((item) => item['lastScore'] != null)
-                .toList();
           });
         })
         .catchError((err) => safe(() => error = errorText(err)));
@@ -875,22 +871,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final today = todayKey();
+    // Questions answered per India-time day (last 28 days), from the server.
+    final byDay = asMap(asMap(data?['consistency'])['days']);
     final trend = List.generate(7, (index) {
       final date = shiftDay(today, index - 6);
-      final sessions = history.where((item) {
-        final stamp = str(
-          item['completedAt'] ?? item['updatedAt'] ?? item['createdAt'],
-        );
-        return stamp.length >= 10 && stamp.substring(0, 10) == date;
-      });
-      final answered = sessions.fold<num>(
-        0,
-        (sum, item) => sum + numOf(item['total'] ?? item['answered']),
-      );
-      return (date, answered);
+      return (date, numOf(byDay[date]));
     });
     final trendMax = trend.fold<num>(1, (m, item) => item.$2 > m ? item.$2 : m);
     final subjects = asList(data?['subjects']);
+    void practiceTopic(dynamic topic) => widget.go(
+      AppRoute('quiz', {
+        'examId': topic['examId'],
+        'topicId': topic['id'],
+        'title': topic['name'],
+      }),
+    );
 
     return AppScreen(
       children: [
@@ -906,6 +901,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
           const Loading(variant: LoadingVariant.home),
         if (data != null) ...[
           _SummaryCard(data: data!),
+          _TodayFocusCard(subjects: subjects, onPractice: practiceTopic),
           ScoreRing(
             value: numOf(data!['accuracy']),
             caption: str(data!['readiness']).isNotEmpty
@@ -982,6 +978,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
               ],
             ),
           ),
+          _StudyDaysCard(days: byDay.keys.toSet()),
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: tx('Subjects', color: palette.ink, size: 18, weight: w800),
@@ -999,19 +996,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
             _SubjectCard(
               subject: subjects[i],
               index: i,
-              onPractice: (topic) => widget.go(
-                AppRoute('quiz', {
-                  'examId': topic['examId'],
-                  'topicId': topic['id'],
-                  'title': topic['name'],
-                }),
-              ),
+              onPractice: practiceTopic,
             ),
           if (subjects.isEmpty)
             const Empty(
               title: 'No subject split yet',
               body: 'Finish a practice set to see strengths and weak areas.',
             ),
+          _MasteredCard(data: data!),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: tx(
@@ -1029,26 +1021,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: tx(
-              'Mock scores',
+              'Mock tests',
               color: palette.ink,
               size: 18,
               weight: w700,
             ),
           ),
-          for (final mock in mocks)
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  tx(str(mock['title']), color: palette.ink, weight: w700),
-                  tx(
-                    'Last score ${mock['lastScore']['rawScore']} / ${mock['lastScore']['maxScore']}',
-                    color: palette.muted,
-                  ),
-                ],
-              ),
-            ),
-          if (mocks.isEmpty)
+          if (asList(data!['mockTrend']).isNotEmpty)
+            _MockTrendCard(trend: asList(data!['mockTrend']))
+          else
             const Empty(
               title: 'No mock score yet',
               body: 'Submit a mock test to see it here. Scoring stays on the server.',
@@ -1065,6 +1046,333 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> with SafeState {
 }
 
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/// Section card title with a small coloured icon.
+Widget _cardTitle(BuildContext context, IconData icon, Accent accent, String title, [String? subtitle]) {
+  final palette = context.palette;
+  return Row(
+    children: [
+      ColorIcon(icon: icon, accent: accent, size: 36),
+      gap(10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            tx(title, color: palette.ink, weight: w800),
+            if (subtitle != null) tx(subtitle, color: palette.muted, size: 12),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+/// The 1–2 weakest topics to practise today, each one tap away.
+class _TodayFocusCard extends StatelessWidget {
+  const _TodayFocusCard({required this.subjects, required this.onPractice});
+  final List<dynamic> subjects;
+  final void Function(dynamic topic) onPractice;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final picks = [
+      for (final subject in subjects)
+        for (final topic in asList(subject['topics']))
+          if (['focus', 'improving'].contains(str(topic['band']))) {...asMap(topic), 'subjectName': subject['name']},
+    ]..sort((a, b) => numOf(a['accuracy']).compareTo(numOf(b['accuracy'])));
+    if (picks.isEmpty) return const SizedBox.shrink();
+    return AppCard(
+      padding: const EdgeInsets.all(16),
+      marginBottom: 14,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _cardTitle(context, Icons.flag_outlined, Accent.orange, "Today's focus", '5 questions each · about 10 minutes'),
+          for (final topic in picks.take(2))
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        tx(str(topic['name']), color: palette.ink, size: 13.5, weight: w600, lines: 2),
+                        tx(
+                          '${topic['accuracy']}% correct · ${topic['subjectName']}',
+                          color: palette.muted,
+                          size: 11.5,
+                          lines: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                  gap(8),
+                  _PracticeChip(onTap: () => onPractice(topic)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PracticeChip extends StatelessWidget {
+  const _PracticeChip({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = context.palette.dark;
+    return Tap(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: dark ? const Color(0x331769C2) : const Color(0xFFEAF2FD),
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: tx(
+          'Practice',
+          color: dark ? const Color(0xFF8CC4FF) : const Color(0xFF1769C2),
+          size: 12,
+          weight: w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// Last 28 days as a 4×7 grid of dots: filled on days with a finished practice set.
+class _StudyDaysCard extends StatelessWidget {
+  const _StudyDaysCard({required this.days});
+  final Set<String> days;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final today = todayKey();
+    final dates = List.generate(28, (i) => shiftDay(today, i - 27));
+    final count = dates.where(days.contains).length;
+    final message = count == 0
+        ? 'Every day you practise lights up a dot.'
+        : count >= 20
+            ? 'Excellent habit! Keep it up.'
+            : count >= 10
+                ? 'Good habit. A few more days makes it stronger.'
+                : 'A good start. Try a little practice every day.';
+    const fill = Color(0xFF19BFFF);
+    return AppCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _cardTitle(context, Icons.calendar_month_outlined, Accent.green, 'Study days', '$count of the last 28 days'),
+          gap(14),
+          for (var row = 0; row < 4; row++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  for (var col = 0; col < 7; col++)
+                    Builder(builder: (context) {
+                      final date = dates[row * 7 + col];
+                      final on = days.contains(date);
+                      final isToday = date == today;
+                      return Container(
+                        width: 30,
+                        height: 30,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: on
+                              ? const LinearGradient(colors: [fill, Color(0xFF1769C2)])
+                              : null,
+                          color: on ? null : (palette.dark ? palette.inset : palette.line),
+                          border: isToday ? Border.all(color: fill, width: 2) : null,
+                        ),
+                        child: tx(
+                          '${int.parse(date.substring(8))}',
+                          color: on ? Colors.white : palette.muted,
+                          size: 10.5,
+                          weight: on ? w700 : null,
+                        ),
+                      );
+                    }),
+                ],
+              ),
+            ),
+          tx(message, color: palette.muted, size: 12.5),
+        ],
+      ),
+    );
+  }
+}
+
+/// Topics mastered (Easy, Medium and Hard passed) out of the exam's topics.
+class _MasteredCard extends StatelessWidget {
+  const _MasteredCard({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final total = numOf(data['topicCount']);
+    if (total == 0) return const SizedBox.shrink();
+    final mastered = numOf(data['masteredTopics']);
+    final studied = numOf(data['studiedTopics']);
+    return AppCard(
+      padding: const EdgeInsets.all(16),
+      marginTop: 4,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _cardTitle(context, Icons.workspace_premium_outlined, Accent.purple, 'Topics mastered'),
+              ),
+              tx('$mastered', color: palette.ink, size: 20, weight: w800),
+              tx(' / $total', color: palette.muted, size: 14, weight: w600),
+            ],
+          ),
+          ProgressBar(value: mastered / total * 100),
+          gap(8),
+          tx(
+            studied == 0
+                ? "Pass a topic's Easy level to start. A topic is mastered once you pass Easy, Medium and Hard."
+                : 'Easy passed in $studied topics. A topic is mastered once you pass Easy, Medium and Hard.',
+            color: palette.muted,
+            size: 12,
+            lineHeight: 17,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Mock score % over the latest mocks as a line, with last / best and the change.
+class _MockTrendCard extends StatelessWidget {
+  const _MockTrendCard({required this.trend});
+  final List<dynamic> trend;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final points = trend.length > 10 ? trend.sublist(trend.length - 10) : trend;
+    final values = points.map((item) => numOf(item['percent']).toDouble().clamp(0, 100).toDouble()).toList();
+    final last = values.last.round();
+    final best = values.reduce((a, b) => a > b ? a : b).round();
+    final change = values.length > 1 ? (values.last - values[values.length - 2]).round() : 0;
+    final note = values.length < 2
+        ? 'Take a few more mocks to see your trend.'
+        : change > 0
+            ? 'Up $change% from the mock before. Well done!'
+            : change < 0
+                ? 'A little lower than last time. One mock does not decide anything; keep going.'
+                : 'Same as the mock before. Steady!';
+    return AppCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _cardTitle(context, Icons.show_chart, Accent.blue, 'Mock score trend', 'Last ${values.length} mocks'),
+          gap(14),
+          SizedBox(
+            height: 110,
+            width: double.infinity,
+            child: CustomPaint(painter: _TrendPainter(values, palette.dark ? palette.inset : palette.line, palette.muted)),
+          ),
+          gap(10),
+          Row(
+            children: [
+              tx('Last ', color: palette.muted, size: 12.5),
+              tx('$last%', color: palette.ink, size: 13, weight: w800),
+              tx('   ·   Best ', color: palette.muted, size: 12.5),
+              tx('$best%', color: palette.ink, size: 13, weight: w800),
+            ],
+          ),
+          gap(4),
+          tx(note, color: palette.muted, size: 12.5, lineHeight: 18),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrendPainter extends CustomPainter {
+  _TrendPainter(this.values, this.grid, this.labelColor);
+  final List<double> values;
+  final Color grid;
+  final Color labelColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const pad = 6.0;
+    // Left gutter for the % labels, so they never sit under a point.
+    const left = 34.0;
+    final h = size.height - pad * 2;
+    double y(double v) => pad + h - v / 100 * h;
+    final gridPaint = Paint()
+      ..color = grid
+      ..strokeWidth = 1;
+    for (final v in [0.0, 50.0, 100.0]) {
+      canvas.drawLine(Offset(left, y(v)), Offset(size.width, y(v)), gridPaint);
+      // Small % label in the left gutter, centred on its grid line.
+      final label = TextPainter(
+        text: TextSpan(
+          text: '${v.round()}%',
+          style: TextStyle(color: labelColor, fontSize: 9.5, fontFamily: headingFont),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      label.paint(canvas, Offset(left - 6 - label.width, y(v) - label.height / 2));
+    }
+    final step = values.length > 1 ? (size.width - left - pad * 2) / (values.length - 1) : 0.0;
+    final points = [
+      for (var i = 0; i < values.length; i++)
+        Offset(values.length > 1 ? left + pad + i * step : (left + size.width) / 2, y(values[i])),
+    ];
+    if (points.length > 1) {
+      final line = Path()..moveTo(points.first.dx, points.first.dy);
+      for (final point in points.skip(1)) {
+        line.lineTo(point.dx, point.dy);
+      }
+      final area = Path.from(line)
+        ..lineTo(points.last.dx, y(0))
+        ..lineTo(points.first.dx, y(0))
+        ..close();
+      canvas.drawPath(
+        area,
+        Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0x5519BFFF), Color(0x0019BFFF)],
+          ).createShader(Offset.zero & size),
+      );
+      canvas.drawPath(
+        line,
+        Paint()
+          ..color = const Color(0xFF19BFFF)
+          ..strokeWidth = 2.5
+          ..style = PaintingStyle.stroke
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+    for (final point in points) {
+      canvas.drawCircle(point, 4, Paint()..color = Colors.white);
+      canvas.drawCircle(point, 2.6, Paint()..color = const Color(0xFF1769C2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TrendPainter old) => old.values != values || old.grid != grid;
+}
 
 /// "Today", "Yesterday" or "26 Nov", in India time.
 String _dayLabel(String stamp) {

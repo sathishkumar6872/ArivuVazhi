@@ -270,10 +270,12 @@ studentRouter.get(
       PracticeSession.find({ studentId: owner(req), kind: { $ne: "retry" } }).select("examId answers completedAt").lean(),
       examId ? Topic.find({ examId, status: "published", kind: { $ne: "current_affairs" } }).select("id").lean() : Promise.resolve([]),
       MockAttempt.find({ studentId: owner(req), status: "submitted" })
-        .sort({ submittedAt: 1 })
+        // Latest 30 (newest first here, put back in date order below).
+        .sort({ submittedAt: -1 })
         .select("mockId rawScore maxScore submittedAt")
         .limit(30)
-        .lean(),
+        .lean()
+        .then((rows) => rows.reverse()),
     ]);
     const topicCount = examTopics.length;
     const answeredIds = [...new Set(sessions.flatMap((session) => session.answers.map((answer) => answer.questionId)))];
@@ -295,7 +297,8 @@ studentRouter.get(
     let total = 0;
     type Tally = { correct: number; total: number };
     const bySubject = new Map<string, Tally & { topics: Map<string, Tally> }>();
-    const activeDays = new Set<string>();
+    // Days with at least one answer (India time) and how many answers each, last 28 days.
+    const answersByDay = new Map<string, number>();
     const now = Date.now();
     const DAY = 24 * 60 * 60 * 1000;
     const since = now - 28 * DAY;
@@ -303,12 +306,15 @@ studentRouter.get(
     const thisWeek: Tally = { correct: 0, total: 0 };
     const lastWeek: Tally = { correct: 0, total: 0 };
     for (const session of sessions) {
-      if (session.completedAt && new Date(session.completedAt).getTime() >= since) activeDays.add(dayKey(new Date(session.completedAt)));
       for (const answer of session.answers) {
         total += 1;
         if (answer.correct) correct += 1;
         const at = new Date(answer.answeredAt || session.completedAt || 0).getTime();
         const week = at >= now - 7 * DAY ? thisWeek : at >= now - 14 * DAY ? lastWeek : null;
+        if (at >= since) {
+          const day = dayKey(new Date(at));
+          answersByDay.set(day, (answersByDay.get(day) || 0) + 1);
+        }
         if (week) {
           week.total += 1;
           if (answer.correct) week.correct += 1;
@@ -351,7 +357,8 @@ studentRouter.get(
         topicCount,
         readiness,
         caveat: "Readiness is an estimate from your practice. It is not a guarantee of passing.",
-        consistency: { activeDaysLast28: activeDays.size },
+        // `days`: India-time date (YYYY-MM-DD) -> questions answered that day, last 28 days.
+        consistency: { activeDaysLast28: answersByDay.size, days: Object.fromEntries([...answersByDay].sort()) },
         mockTrend: attempts.map((attempt) => ({
           mockId: attempt.mockId,
           submittedAt: attempt.submittedAt,
